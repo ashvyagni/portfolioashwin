@@ -18,10 +18,14 @@ uniform vec2 uPointer;
 uniform float uTime;
 uniform float uGather;
 uniform float uDpr;
+uniform float uZoom;
+uniform vec2 uFocus;
 out float vTone;
 float hash(float n) { return fract(sin(n * 127.1) * 43758.5453); }
 void main() {
-  vec2 p = aHome;
+  // The camera's pull: in close on the eyes, out to the whole face.
+  vec2 p = uFocus + (aHome - uFocus) * uZoom;
+  p += (uRes * 0.5 - uFocus) * smoothstep(1.0, 3.0, uZoom);
   // Gather in from a scatter.
   vec2 away = vec2(hash(aSeed) - 0.5, hash(aSeed + 3.1) - 0.5) * uRes * 1.2;
   float g = smoothstep(0.0, 1.0, clamp(uGather * 1.4 - hash(aSeed + 7.7) * 0.4, 0.0, 1.0));
@@ -34,7 +38,7 @@ void main() {
   p += vec2(sin(uTime * 0.8 + aSeed), cos(uTime * 0.7 + aSeed * 1.3)) * 0.35;
   vec2 clip = (p / uRes) * 2.0 - 1.0;
   gl_Position = vec4(clip.x, -clip.y, 0.0, 1.0);
-  gl_PointSize = aSize * uDpr;
+  gl_PointSize = aSize * uDpr * mix(1.0, uZoom, 0.7);
   vTone = aSize;
 }
 `
@@ -78,6 +82,7 @@ export function createPortrait(canvas: HTMLCanvasElement) {
   let W = 1
   let H = 1
   let maxSize = 1
+  const focus = { x: 0, y: 0 }
   const image = new Image()
   image.src = photo
   const loaded = image.decode().catch(() => undefined)
@@ -135,8 +140,11 @@ export function createPortrait(canvas: HTMLCanvasElement) {
       }
     }
     const data: number[] = []
-    const ox = (W - cols * pitch) / 2 + (portrait ? 0 : W * 0.16)
-    const oy = (H - rows * pitch) / 2 + (portrait ? -H * 0.06 : 0)
+    const ox = (W - cols * pitch) / 2
+    const oy = (H - rows * pitch) / 2
+    // Between the eyes, in the crop.
+    focus.x = ox + cols * pitch * 0.5
+    focus.y = oy + rows * pitch * 0.44
     maxSize = pitch * 1.05
     for (let y = 0; y < rows; y++) {
       for (let x = 0; x < cols; x++) {
@@ -172,7 +180,7 @@ export function createPortrait(canvas: HTMLCanvasElement) {
     void build()
   }
 
-  function render(time: number, pointer: { x: number; y: number }, gather: number) {
+  function render(time: number, pointer: { x: number; y: number }, gather: number, zoom = 1) {
     gl!.clearColor(0, 0, 0, 0)
     gl!.clear(gl!.COLOR_BUFFER_BIT)
     if (!count) return
@@ -184,6 +192,8 @@ export function createPortrait(canvas: HTMLCanvasElement) {
     gl!.uniform1f(U('uGather'), gather)
     gl!.uniform1f(U('uDpr'), dpr)
     gl!.uniform1f(U('uMax'), maxSize)
+    gl!.uniform1f(U('uZoom'), zoom)
+    gl!.uniform2f(U('uFocus'), focus.x, focus.y)
     gl!.drawArrays(gl!.POINTS, 0, count)
   }
 

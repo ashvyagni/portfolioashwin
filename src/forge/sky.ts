@@ -1,241 +1,368 @@
 import * as THREE from 'three'
-import { clamp01, easeInOut, mulberry32, smooth } from './ink'
+import { clamp01, easeInOut, easeOut, mulberry32, smooth } from './ink'
+import { createMatsya } from './matsya'
+import { P } from './palette'
 
-// The sky after the cross cuts the page open: rocks hanging in the air, and
-// pieces of the page drifting among them, all drawn — toon-shaded in a few
-// tones, hatched where the light does not reach, outlined in ink. You run
-// across the rocks in your own eyes, leap from one to the next, and at the
-// last one drop: through the clouds, down into the dark.
+// What the cross cuts open. The page is a solid thing — a slab of paper with
+// thickness — and the two rays burn it into four, their edges charred and
+// glowing. The quarters drift apart and out into a sky, among pieces of the
+// landing page torn away with them: that debris is the world you run across,
+// leaping from piece to piece, until Matsya swims up under the last one. You
+// ride it, and jump: down through the cloud sea, into the black.
 
-const ROCKS = 8
-const EYE = 1.55
+const PAGE_W = 16
+const EYE = 1.5
+const KOI = 16
 
-const rockVertex = /* glsl */ `
-  varying vec3 vNormal;
+type Pose = { pos: THREE.Vector3; quat: THREE.Quaternion }
+type Piece = {
+  group: THREE.Group
+  start: Pose
+  rest: Pose
+  spin: THREE.Vector3
+  bob: number
+  top: number // half the thickness: where your feet are, above the piece's middle
+  glow?: THREE.LineSegments
+}
+
+const slabVertex = /* glsl */ `
+  varying vec2 vUv;
+  varying vec3 vN;
   varying vec3 vWorld;
   void main() {
+    vUv = uv;
+    vN = normalize(mat3(modelMatrix) * normal);
     vec4 w = modelMatrix * vec4(position, 1.0);
     vWorld = w.xyz;
-    vNormal = normalize(mat3(modelMatrix) * normal);
     gl_Position = projectionMatrix * viewMatrix * w;
   }
 `
-const rockFragment = /* glsl */ `
+// The printed face: the page as it was, lit like paper in the sun (a soft
+// cel step across it), the sky's haze over distance.
+const faceFragment = /* glsl */ `
+  uniform sampler2D tPage;
   uniform vec3 uLight;
-  uniform vec3 uPaper;
-  uniform vec3 uInk;
-  uniform vec3 uTint;
-  uniform float uFog;
-  uniform vec3 uFogColor;
-  uniform float uTime;
-  varying vec3 vNormal;
+  uniform vec3 uHaze;
+  uniform float uHazeK;
+  uniform float uLit;
+  varying vec2 vUv;
+  varying vec3 vN;
   varying vec3 vWorld;
-  float hash(vec2 p) { p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
-  float noise(vec2 p) {
-    vec2 i = floor(p); vec2 f = fract(p); vec2 u = f * f * (3.0 - 2.0 * f);
-    return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), u.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x), u.y);
-  }
   void main() {
-    vec3 n = normalize(vNormal);
-    float l = dot(n, normalize(uLight)) * 0.5 + 0.5;
-    // Three tones, the steps softened: a cel's shading, painted.
-    float tone = smoothstep(0.42, 0.48, l) * 0.45 + smoothstep(0.68, 0.74, l) * 0.55;
-    vec3 col = mix(uTint * 0.62, uPaper, tone);
-    // Grass-green on the tops, where you land.
-    col = mix(col, mix(vec3(0.55, 0.62, 0.38), vec3(0.78, 0.82, 0.6), tone), smoothstep(0.75, 0.9, n.y) * 0.85);
-    // Hatching in the shade, wobbling on twos.
-    vec2 fc = gl_FragCoord.xy + (noise(gl_FragCoord.xy * 0.03 + floor(uTime * 8.0)) - 0.5) * 3.0;
-    float s1 = abs(fract((fc.x + fc.y) / 6.0) - 0.5) * 2.0;
-    float s2 = abs(fract((fc.x - fc.y) / 7.0) - 0.5) * 2.0;
-    float dark = 1.0 - l;
-    float hatch = (1.0 - smoothstep(0.0, 0.3, s1)) * smoothstep(0.45, 0.6, dark) + (1.0 - smoothstep(0.0, 0.25, s2)) * smoothstep(0.62, 0.78, dark);
-    col = mix(col, uInk, clamp(hatch, 0.0, 1.0) * 0.55);
-    float grain = 0.94 + 0.08 * noise(gl_FragCoord.xy * 0.4);
-    col *= grain;
+    vec3 c = texture2D(tPage, vUv).rgb;
+    float l = dot(normalize(vN), normalize(uLight)) * 0.5 + 0.5;
+    c *= mix(1.0, 0.74 + 0.26 * smoothstep(0.45, 0.55, l), uLit);
     float d = length(vWorld - cameraPosition);
-    col = mix(col, uFogColor, 1.0 - exp(-d * uFog));
-    gl_FragColor = vec4(col, 1.0);
+    c = mix(c, uHaze, (1.0 - exp(-d * uHazeK)) * 0.85);
+    gl_FragColor = vec4(c, 1.0);
+    #include <colorspace_fragment>
   }
 `
-const hullVertex = /* glsl */ `
-  uniform float uWidth;
+// The paper's edge: layers of stock, cream with fine dark lines between.
+const edgeFragment = /* glsl */ `
+  uniform vec3 uLight;
+  uniform vec3 uHaze;
+  uniform float uHazeK;
+  varying vec2 vUv;
+  varying vec3 vN;
+  varying vec3 vWorld;
   void main() {
-    vec4 mv = modelViewMatrix * vec4(position * (1.0 + uWidth), 1.0);
-    gl_Position = projectionMatrix * mv;
+    float l = dot(normalize(vN), normalize(uLight)) * 0.5 + 0.5;
+    float layers = 0.88 + 0.12 * step(0.5, fract(vUv.y * 9.0));
+    vec3 c = vec3(0.86, 0.8, 0.68) * layers * (0.62 + 0.38 * smoothstep(0.4, 0.6, l));
+    float d = length(vWorld - cameraPosition);
+    c = mix(c, uHaze, (1.0 - exp(-d * uHazeK)) * 0.85);
+    gl_FragColor = vec4(c, 1.0);
+    #include <colorspace_fragment>
   }
 `
-const hullFragment = /* glsl */ `
-  uniform vec3 uInk;
-  uniform float uFog;
-  uniform vec3 uFogColor;
+const skyVertex = /* glsl */ `
+  varying vec3 vDir;
+  void main() { vDir = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }
+`
+const skyFragment = /* glsl */ `
+  uniform vec3 uTop;
+  uniform vec3 uMid;
+  uniform vec3 uLow;
+  uniform vec3 uSun;
+  uniform float uDark;
+  varying vec3 vDir;
   void main() {
-    float d = gl_FragCoord.z / gl_FragCoord.w;
-    gl_FragColor = vec4(mix(uInk, uFogColor, 1.0 - exp(-d * uFog)), 1.0);
+    float y = vDir.y;
+    vec3 c = mix(uLow, uMid, smoothstep(-0.05, 0.25, y));
+    c = mix(c, uTop, smoothstep(0.2, 0.85, y));
+    // Below the cloud sea the light goes, toward the dark of the fluid.
+    c = mix(c, vec3(0.04, 0.04, 0.06), smoothstep(-0.02, -0.6, y));
+    float s = max(dot(vDir, normalize(uSun)), 0.0);
+    c += vec3(1.0, 0.92, 0.75) * (pow(s, 600.0) * 2.0 + pow(s, 12.0) * 0.25);
+    c = mix(c, vec3(0.02, 0.02, 0.03), uDark);
+    gl_FragColor = vec4(c, 1.0);
+    #include <colorspace_fragment>
   }
 `
 
-function rockGeometry(rng: () => number) {
-  const g = new THREE.IcosahedronGeometry(1, 3)
-  const p = g.attributes.position as THREE.BufferAttribute
-  const v = new THREE.Vector3()
-  const seed = rng() * 100
-  for (let i = 0; i < p.count; i++) {
-    v.fromBufferAttribute(p, i)
-    const n = Math.sin(v.x * 3.1 + seed) * Math.sin(v.y * 2.7 + seed * 0.7) * Math.sin(v.z * 3.3 + seed * 1.3)
-    v.multiplyScalar(1 + 0.18 * n + 0.06 * Math.sin(v.x * 9 + v.z * 7 + seed))
-    // A flat top to stand on; the underside hanging to a jagged point.
-    if (v.y > 0.25) v.y = 0.25 + (v.y - 0.25) * 0.25
-    else v.y = v.y * (1.6 + 1.2 * Math.max(-v.y, 0)) - Math.max(-v.y - 0.4, 0) * (0.6 + 0.8 * Math.abs(Math.sin(v.x * 5 + v.z * 4 + seed)))
-    p.setXYZ(i, v.x * 1.25, v.y, v.z * 1.15)
-  }
-  const flat = g.toNonIndexed()
-  flat.computeVertexNormals()
-  return flat
-}
-
+// A cumulus, painted the anime way: a lavender shadow side, a cream lit top,
+// a hard step between, hatching in the shade like a background painter's.
 function cloudTexture(rng: () => number) {
   const c = document.createElement('canvas')
-  c.width = 512
-  c.height = 256
+  c.width = 1024
+  c.height = 512
   const g = c.getContext('2d')!
-  const puffs = Array.from({ length: 7 }, (_, i) => ({ x: 70 + i * 62 + (rng() - 0.5) * 20, y: 150 - Math.sin((i / 6) * Math.PI) * 50 + (rng() - 0.5) * 16, r: 44 + rng() * 30 }))
-  // Only the outer silhouette inked: every puff drawn a little larger in ink,
-  // then the paper laid over, so the seams between puffs vanish.
-  const body = (grow: number, color: string) => {
+  const puffs = Array.from({ length: 11 }, (_, i) => {
+    const u = i / 10
+    return { x: 120 + u * 780 + (rng() - 0.5) * 50, y: 330 - Math.sin(u * Math.PI) * (140 + rng() * 60) + (rng() - 0.5) * 30, r: 70 + rng() * 70 + Math.sin(u * Math.PI) * 50 }
+  })
+  const body = (dx: number, dy: number, grow: number, color: string) => {
     g.fillStyle = color
     puffs.forEach((p) => {
       g.beginPath()
-      g.arc(p.x, p.y, p.r + grow, 0, Math.PI * 2)
+      g.arc(p.x + dx, p.y + dy, Math.max(p.r + grow, 1), 0, Math.PI * 2)
       g.fill()
     })
     g.beginPath()
-    g.roundRect(60 - grow, 150 - grow, 400 + grow * 2, 40 + grow * 2, 20)
+    g.roundRect(120 + dx - grow, 300 + dy - grow, 780 + grow * 2, 110 + grow * 2, 50)
     g.fill()
   }
-  body(3, '#2a2420')
-  body(0, '#f7f3ea')
-  // A little shade under each puff, hatched.
-  g.strokeStyle = 'rgba(42, 36, 32, 0.25)'
-  g.lineWidth = 1.5
-  for (let x = 90; x < 440; x += 9) {
+  body(0, 0, 4, 'rgba(60, 70, 120, 0.55)')
+  body(0, 0, 0, '#B9C2E4')
+  g.save()
+  g.globalCompositeOperation = 'source-atop'
+  body(-18, -34, -6, '#FFF6E6')
+  body(-30, -52, -26, '#FFFFFF')
+  g.strokeStyle = 'rgba(70, 80, 140, 0.25)'
+  g.lineWidth = 3
+  for (let x = 140; x < 900; x += 14) {
     g.beginPath()
-    g.moveTo(x, 186)
-    g.lineTo(x + 10, 172)
+    g.moveTo(x, 405)
+    g.lineTo(x + 26, 360)
     g.stroke()
   }
+  g.restore()
   const t = new THREE.CanvasTexture(c)
   t.colorSpace = THREE.SRGBColorSpace
   return t
 }
 
-function shardTexture() {
-  const c = document.createElement('canvas')
-  c.width = 256
-  c.height = 256
-  const g = c.getContext('2d')!
-  g.fillStyle = '#efe7d8'
-  g.fillRect(0, 0, 256, 256)
-  g.strokeStyle = '#2a2420'
-  g.lineWidth = 6
-  g.strokeRect(3, 3, 250, 250)
-  g.lineWidth = 2
-  for (let i = 0; i < 6; i++) {
-    g.beginPath()
-    g.moveTo(28, 50 + i * 30)
-    g.lineTo(28 + 60 + ((i * 53) % 140), 50 + i * 30)
-    g.stroke()
+// Cut a polygon in two along a line (through p, along d).
+function split(poly: THREE.Vector2[], p: THREE.Vector2, d: THREE.Vector2) {
+  const n = new THREE.Vector2(-d.y, d.x)
+  const side = (v: THREE.Vector2) => (v.x - p.x) * n.x + (v.y - p.y) * n.y
+  const a: THREE.Vector2[] = []
+  const b: THREE.Vector2[] = []
+  for (let i = 0; i < poly.length; i++) {
+    const u = poly[i]
+    const v = poly[(i + 1) % poly.length]
+    const su = side(u)
+    const sv = side(v)
+    ;(su >= 0 ? a : b).push(u)
+    if (su >= 0 !== sv >= 0) {
+      const x = u.clone().lerp(v, su / (su - sv))
+      a.push(x)
+      b.push(x.clone())
+    }
   }
-  const t = new THREE.CanvasTexture(c)
-  t.colorSpace = THREE.SRGBColorSpace
-  return t
+  return [a, b].filter((q) => q.length >= 3)
 }
+const area = (poly: THREE.Vector2[]) => Math.abs(poly.reduce((s, v, i) => s + v.x * poly[(i + 1) % poly.length].y - poly[(i + 1) % poly.length].x * v.y, 0) / 2)
+const centre = (poly: THREE.Vector2[]) => poly.reduce((s, v) => s.add(v), new THREE.Vector2()).divideScalar(poly.length)
 
 export function createSky(canvas: HTMLCanvasElement) {
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false })
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.75))
   const scene = new THREE.Scene()
-  const paper = new THREE.Color('#ece6da')
-  scene.background = paper.clone()
-  const camera = new THREE.PerspectiveCamera(70, 1, 0.1, 400)
+  const camera = new THREE.PerspectiveCamera(50, 1, 0.05, 900)
   const rng = mulberry32(42)
+  const haze = new THREE.Color(P.skyLow)
+  const shared = { uLight: { value: new THREE.Vector3(0.45, 0.85, 0.3) }, uHaze: { value: haze }, uHazeK: { value: 0.006 } }
+  const skyUniforms = {
+    uTop: { value: new THREE.Color(P.skyTop) },
+    uMid: { value: new THREE.Color(P.skyMid) },
+    uLow: { value: new THREE.Color(P.skyLow) },
+    uSun: { value: new THREE.Vector3(0.6, 0.35, -1) },
+    uDark: { value: 0 },
+  }
+  scene.add(new THREE.Mesh(new THREE.SphereGeometry(600, 48, 24), new THREE.ShaderMaterial({ vertexShader: skyVertex, fragmentShader: skyFragment, uniforms: skyUniforms, side: THREE.BackSide, depthWrite: false })))
 
-  const uniforms = {
-    uLight: { value: new THREE.Vector3(0.5, 0.8, 0.3) },
-    uPaper: { value: new THREE.Color('#f2ece0') },
-    uInk: { value: new THREE.Color('#2a2420') },
-    uTint: { value: new THREE.Color('#9a8f86') },
-    uFog: { value: 0.012 },
-    uFogColor: { value: paper.clone() },
-    uTime: { value: 0 },
-  }
-  const rockMat = new THREE.ShaderMaterial({ vertexShader: rockVertex, fragmentShader: rockFragment, uniforms })
-  const hullMat = new THREE.ShaderMaterial({
-    vertexShader: hullVertex,
-    fragmentShader: hullFragment,
-    uniforms: { uWidth: { value: 0.035 }, uInk: uniforms.uInk, uFog: uniforms.uFog, uFogColor: uniforms.uFogColor },
-    side: THREE.BackSide,
-  })
-
-  // The path's rocks, then a scatter of others all about, near and far.
-  type Rock = { mesh: THREE.Group; top: THREE.Vector3; r: number; spin: number; bob: number }
-  const rocks: Rock[] = []
-  const addRock = (x: number, y: number, z: number, s: number) => {
-    const geo = rockGeometry(rng)
-    const group = new THREE.Group()
-    group.add(new THREE.Mesh(geo, rockMat), new THREE.Mesh(geo, hullMat))
-    group.position.set(x, y, z)
-    group.scale.set(s, s * (0.8 + rng() * 0.4), s)
-    group.rotation.y = rng() * Math.PI * 2
-    scene.add(group)
-    const rock = { mesh: group, top: new THREE.Vector3(x, y + 0.27 * group.scale.y, z), r: s * 1.1, spin: (rng() - 0.5) * 0.04, bob: rng() * 6 }
-    rocks.push(rock)
-    return rock
-  }
-  const path: Rock[] = []
-  for (let i = 0; i < ROCKS; i++) {
-    const x = Math.sin(i * 1.3) * 2.2 + (i % 2 ? 0.8 : -0.8)
-    const y = Math.sin(i * 0.9) * 1.6 - i * 0.5
-    path.push(addRock(x, y, -i * 7.2, 2.0 + rng() * 0.8))
-  }
-  for (let i = 0; i < 46; i++) {
-    const z = -rng() * 70 + 12
-    const side = rng() < 0.5 ? -1 : 1
-    addRock(side * (6 + rng() * 26), (rng() - 0.45) * 26, z, 0.5 + rng() * 2.6)
-  }
-
-  // Clouds below and among the rocks (you fall through them at the end).
+  // Clouds: great ones among the debris, a sea of them far below.
   const clouds: THREE.Sprite[] = []
-  for (let i = 0; i < 26; i++) {
-    const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: cloudTexture(rng), transparent: true, depthWrite: false, fog: false }))
-    const below = i < 14
-    s.position.set((rng() - 0.5) * 60, below ? -10 - rng() * 40 : (rng() - 0.5) * 20, -rng() * 60 - (below ? -10 : 5))
-    const w = 8 + rng() * 14
+  const cloudMats = Array.from({ length: 5 }, () => new THREE.SpriteMaterial({ map: cloudTexture(rng), transparent: true, depthWrite: false, fog: false }))
+  for (let i = 0; i < 44; i++) {
+    const sea = i >= 14
+    const s = new THREE.Sprite(cloudMats[i % cloudMats.length])
+    const w = sea ? 40 + rng() * 50 : 18 + rng() * 26
     s.scale.set(w, w / 2, 1)
+    s.position.set((rng() - 0.5) * (sea ? 420 : 160), sea ? -40 - rng() * 10 : (rng() - 0.6) * 30 - 6, -rng() * 240 + (sea ? 60 : -10))
     scene.add(s)
     clouds.push(s)
   }
 
-  // Pieces of the page, torn away and drifting.
-  const shardMat = new THREE.MeshBasicMaterial({ map: shardTexture(), side: THREE.DoubleSide })
-  const shards: { mesh: THREE.Mesh; spin: THREE.Vector3 }[] = []
-  for (let i = 0; i < 34; i++) {
-    const shape = new THREE.Shape()
-    const n = 3 + Math.floor(rng() * 3)
-    for (let k = 0; k < n; k++) {
-      const a = (k / n) * Math.PI * 2 + rng() * 0.6
-      const r = 0.4 + rng() * 0.6
-      if (k === 0) shape.moveTo(Math.cos(a) * r, Math.sin(a) * r)
-      else shape.lineTo(Math.cos(a) * r, Math.sin(a) * r)
-    }
-    const geo = new THREE.ShapeGeometry(shape)
+  // Paper scraps on the wind.
+  const scraps = new THREE.InstancedMesh(new THREE.PlaneGeometry(0.14, 0.1), new THREE.MeshBasicMaterial({ color: '#efe6d4', side: THREE.DoubleSide }), 260)
+  const scrapSeed = Array.from({ length: 260 }, () => ({ p: new THREE.Vector3((rng() - 0.5) * 60, (rng() - 0.5) * 24, -rng() * 110 + 8), s: rng() * 10, v: 0.2 + rng() * 0.6 }))
+  scene.add(scraps)
+  const d = new THREE.Object3D()
+
+  const matsya = createMatsya()
+  matsya.group.scale.setScalar(KOI)
+  scene.add(matsya.group)
+
+  const pieces: Piece[] = []
+  const pageGroup = new THREE.Group()
+  scene.add(pageGroup)
+  let path: Piece[] = []
+  let aspect = 16 / 9
+  const pageCam = new THREE.Vector3()
+
+  function materials(tex: THREE.Texture) {
+    return [
+      new THREE.ShaderMaterial({ vertexShader: slabVertex, fragmentShader: faceFragment, uniforms: { ...shared, tPage: { value: tex }, uLit: { value: 1 } } }),
+      new THREE.ShaderMaterial({ vertexShader: slabVertex, fragmentShader: edgeFragment, uniforms: shared }),
+    ]
+  }
+
+  // A slab from a polygon of the page (page units, centred), its face showing
+  // that part of the page, its folds inked, its burnt edges glowing.
+  function slab(poly: THREE.Vector2[], mats: THREE.Material[], w: number, h: number, depth: number, charred: THREE.Vector2[][] = []) {
+    const geo = new THREE.ExtrudeGeometry(new THREE.Shape(poly), { depth, bevelEnabled: false })
+    geo.translate(0, 0, -depth / 2)
+    const p = geo.attributes.position as THREE.BufferAttribute
     const uv = geo.attributes.uv as THREE.BufferAttribute
-    for (let k = 0; k < uv.count; k++) uv.setXY(k, uv.getX(k) * 0.5 + 0.5, uv.getY(k) * 0.5 + 0.5)
-    const m = new THREE.Mesh(geo, shardMat)
-    m.position.set((rng() - 0.5) * 24, (rng() - 0.3) * 12, -rng() * 60 + 6)
-    m.scale.setScalar(0.4 + rng() * 1.2)
-    m.rotation.set(rng() * 6, rng() * 6, rng() * 6)
-    scene.add(m)
-    shards.push({ mesh: m, spin: new THREE.Vector3(rng() - 0.5, rng() - 0.5, rng() - 0.5).multiplyScalar(0.6) })
+    const n = geo.attributes.normal as THREE.BufferAttribute
+    for (let i = 0; i < p.count; i++) {
+      if (Math.abs(n.getZ(i)) > 0.9) uv.setXY(i, p.getX(i) / w + 0.5, p.getY(i) / h + 0.5)
+      else uv.setXY(i, (p.getX(i) + p.getY(i)) * 0.5, (p.getZ(i) + depth / 2) / depth)
+    }
+    const group = new THREE.Group()
+    group.add(new THREE.Mesh(geo, mats))
+    group.add(new THREE.LineSegments(new THREE.EdgesGeometry(geo, 20), new THREE.LineBasicMaterial({ color: '#1e140e' })))
+    let glow: THREE.LineSegments | undefined
+    if (charred.length) {
+      const pts: number[] = []
+      charred.forEach((line) => {
+        for (let i = 0; i < line.length - 1; i++) pts.push(line[i].x, line[i].y, depth / 2 + 0.003, line[i + 1].x, line[i + 1].y, depth / 2 + 0.003)
+      })
+      const g = new THREE.BufferGeometry()
+      g.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3))
+      glow = new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: P.ember, transparent: true }))
+      group.add(glow)
+    }
+    return { group, glow }
+  }
+
+  // ---- the world, from the two pages
+
+  // cutPage: the page the rays went through; cross: where they crossed
+  // (fractions of width and height) and their width (fraction of the width).
+  function build(cutPage: HTMLCanvasElement, landing: HTMLCanvasElement | null, cross: { x: number; y: number; w: number }) {
+    pieces.forEach((p) => pageGroup.remove(p.group))
+    pieces.length = 0
+    const W = PAGE_W
+    const H = W / aspect
+    const depth = W * 0.012
+    const cutTex = new THREE.CanvasTexture(cutPage)
+    cutTex.colorSpace = THREE.SRGBColorSpace
+    const cutMats = materials(cutTex)
+    const cx = (cross.x - 0.5) * W
+    const cy = (0.5 - cross.y) * H
+    const half = (cross.w * W) / 2
+    // A burnt, ragged edge along a ray.
+    const jag = (from: number, to: number, along: 'x' | 'y', at: number, sign: number) => {
+      const pts: THREE.Vector2[] = []
+      const n = 30
+      for (let i = 0; i <= n; i++) {
+        const t = from + ((to - from) * i) / n
+        const off = at + sign * (half + Math.abs(Math.sin(t * 9.1)) * 0.05 + rng() * 0.07)
+        pts.push(along === 'x' ? new THREE.Vector2(t, off) : new THREE.Vector2(off, t))
+      }
+      return pts
+    }
+    const L = -W / 2
+    const R = W / 2
+    const T = H / 2
+    const B = -H / 2
+    const flat = new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0))
+    const route = [
+      new THREE.Vector3(0, -2, -12),
+      new THREE.Vector3(4.5, -1.2, -26),
+      new THREE.Vector3(-3, -0.4, -40),
+      new THREE.Vector3(3.8, -1.6, -54),
+      new THREE.Vector3(-2.5, -0.8, -68),
+      new THREE.Vector3(2.4, -2.2, -82),
+      new THREE.Vector3(-1.5, -1.0, -96),
+    ]
+    const corners = [
+      { sx: -1, sy: 1 },
+      { sx: 1, sy: 1 },
+      { sx: -1, sy: -1 },
+      { sx: 1, sy: -1 },
+    ]
+    corners.forEach(({ sx, sy }, i) => {
+      const xEdge = sx < 0 ? L : R
+      const yEdge = sy > 0 ? T : B
+      const horiz = jag(cx, xEdge, 'x', cy, sy)
+      const vert = jag(cy, yEdge, 'y', cx, sx)
+      // Bounded by the page's corner and the two burnt cuts; wound consistently.
+      let poly = [horiz[0], ...horiz.slice(1), new THREE.Vector2(xEdge, yEdge), ...vert.slice().reverse()]
+      if (THREE.ShapeUtils.isClockWise(poly)) poly = poly.reverse()
+      const s = slab(poly, cutMats, W, H, depth, [horiz, vert])
+      const mid = centre(poly)
+      const q = flat.clone().multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), (rng() - 0.5) * 0.5))
+      const at = route[[0, 1, 3, 5][i]].clone()
+      s.group.userData.mid = new THREE.Vector3(mid.x, mid.y, 0)
+      s.group.userData.corner = { sx, sy }
+      pieces.push({
+        group: s.group,
+        start: { pos: new THREE.Vector3(), quat: new THREE.Quaternion() },
+        rest: { pos: at.sub(new THREE.Vector3(mid.x, mid.y, 0).applyQuaternion(q)), quat: q },
+        spin: new THREE.Vector3(),
+        bob: rng() * 6,
+        top: depth / 2,
+        glow: s.glow,
+      })
+      pageGroup.add(s.group)
+    })
+    // The landing page, torn into pieces with it.
+    if (landing) {
+      const tex = new THREE.CanvasTexture(landing)
+      tex.colorSpace = THREE.SRGBColorSpace
+      const mats = materials(tex)
+      let polys = [[new THREE.Vector2(L, B), new THREE.Vector2(R, B), new THREE.Vector2(R, T), new THREE.Vector2(L, T)]]
+      for (let k = 0; k < 60 && polys.length < 12; k++) {
+        polys.sort((x, y) => area(y) - area(x))
+        const big = polys.shift()!
+        const a = rng() * Math.PI
+        polys.push(...split(big, centre(big).add(new THREE.Vector2((rng() - 0.5) * 1.2, (rng() - 0.5) * 1.2)), new THREE.Vector2(Math.cos(a), Math.sin(a))))
+      }
+      polys = polys.map((p) => (THREE.ShapeUtils.isClockWise(p) ? p.reverse() : p))
+      polys.forEach((poly, i) => {
+        const s = slab(poly, mats, W, H, depth)
+        const mid = centre(poly)
+        const onRoute = i < 3
+        const at = onRoute ? route[[2, 4, 6][i]].clone() : new THREE.Vector3((rng() < 0.5 ? -1 : 1) * (8 + rng() * 24), (rng() - 0.5) * 20, -rng() * 120 + 2)
+        const q = onRoute
+          ? flat.clone().multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), rng() * 6))
+          : new THREE.Quaternion().setFromEuler(new THREE.Euler(rng() * 6, rng() * 6, rng() * 6))
+        s.group.userData.mid = new THREE.Vector3(mid.x, mid.y, 0)
+        const rest = at.clone().sub(new THREE.Vector3(mid.x, mid.y, 0).applyQuaternion(q))
+        pieces.push({
+          group: s.group,
+          start: { pos: rest.clone().add(new THREE.Vector3(0, -40, 10)), quat: q.clone() },
+          rest: { pos: rest, quat: q },
+          spin: onRoute ? new THREE.Vector3() : new THREE.Vector3(rng() - 0.5, rng() - 0.5, rng() - 0.5).multiplyScalar(0.12),
+          bob: rng() * 6,
+          top: depth / 2,
+        })
+        pageGroup.add(s.group)
+      })
+    }
+    // The route, in the order you cross it.
+    path = [0, 1, 4, 2, 5, 3, 6].map((i) => pieces[i]).filter(Boolean)
+    // The assembled page exactly fills the view from here.
+    pageCam.set(0, 0, H / 2 / Math.tan((camera.fov * Math.PI) / 360))
+  }
+
+  function topOf(p: Piece, out: THREE.Vector3) {
+    return out.copy(p.group.userData.mid as THREE.Vector3).setZ(p.top).applyQuaternion(p.group.quaternion).add(p.group.position)
   }
 
   const pos = new THREE.Vector3()
@@ -243,80 +370,136 @@ export function createSky(canvas: HTMLCanvasElement) {
   const a = new THREE.Vector3()
   const b = new THREE.Vector3()
   const fwd = new THREE.Vector3()
-  const black = new THREE.Color('#050506')
-  // How much the view is leaping (for the speed lines drawn over it).
-  const state = { leap: 0, falling: 0, dark: 0 }
+  const axis = new THREE.Vector3()
+  const state = { leap: 0, dark: 0, shake: 0, riding: 0, landed: 0 }
+  let lastTime = 0
 
   function setSize(w: number, h: number) {
+    aspect = w / h
     renderer.setSize(w, h, false)
-    camera.aspect = w / h
-    camera.fov = w < h ? 82 : 70
+    camera.aspect = aspect
     camera.updateProjectionMatrix()
   }
 
-  // run: 0 … 1 across the rocks; fall: 0 … 1 from the last one down into the dark.
-  function render(run: number, fall: number, time: number) {
-    uniforms.uTime.value = time
-    rocks.forEach((r) => {
-      r.mesh.rotation.y += r.spin * 0.016
-      r.mesh.position.y = r.top.y - 0.27 * r.mesh.scale.y + Math.sin(time * 0.5 + r.bob) * (path.includes(r) ? 0.02 : 0.12)
-    })
-    shards.forEach((s) => {
-      s.mesh.rotation.x += s.spin.x * 0.016
-      s.mesh.rotation.y += s.spin.y * 0.016
-    })
+  // Where Matsya swims, u: 0 … 1.
+  const swimPath = (u: number, out: THREE.Vector3) => {
+    topOf(path[path.length - 1], out)
+    return out.set(out.x + Math.sin(u * 2.4) * 16, out.y - 4 + Math.sin(u * 3.1) * 2 - u * 14, out.z - 10 - u * 70)
+  }
 
-    const seg = clamp01(run) * (ROCKS - 1)
-    const i = Math.min(Math.floor(seg), ROCKS - 2)
-    const f = seg - i
-    const A = path[i]
-    const B = path[i + 1]
-    fwd.subVectors(B.top, A.top).setY(0).normalize()
+  // cut: seconds since the page was cut; run: 0 … 1 across the debris;
+  // ride: 0 … 1 on Matsya; fall: 0 … 1 down into the dark.
+  function render(cut: number, run: number, ride: number, fall: number, time: number) {
+    const dt = Math.min(Math.max(time - lastTime, 0), 0.05)
+    lastTime = time
+    if (!pieces.length) return
+    const apart = easeOut(clamp01((cut - 0.1) / 1.0))
+    const fly = easeInOut(clamp01((cut - 1.0) / 2.6))
+    pieces.forEach((p, i) => {
+      if (i < 4) {
+        const { sx, sy } = p.group.userData.corner
+        const spread = new THREE.Vector3(sx * 0.9, sy * 0.55, -0.6).multiplyScalar(apart)
+        const turn = new THREE.Quaternion().setFromEuler(new THREE.Euler(-sy * 0.14 * apart, sx * 0.18 * apart, sx * sy * 0.05 * apart))
+        p.group.position.copy(spread).lerp(p.rest.pos, fly)
+        p.group.quaternion.copy(turn).slerp(p.rest.quat, fly)
+        if (p.glow) (p.glow.material as THREE.LineBasicMaterial).opacity = 1 - smooth(2, 7, cut)
+      } else {
+        p.group.position.copy(p.start.pos).lerp(p.rest.pos, easeOut(clamp01((cut - 1.2) / 2.4)))
+        p.group.quaternion.copy(p.rest.quat)
+        if (p.spin.lengthSq()) p.group.rotateOnWorldAxis(axis.copy(p.spin).normalize(), time * p.spin.length())
+      }
+      p.group.position.y += Math.sin(time * 0.6 + p.bob) * (path.includes(p) ? 0.04 : 0.25) * fly
+    })
+    scrapSeed.forEach((s, i) => {
+      d.position.set(s.p.x + Math.sin(time * 0.3 + s.s) * 2, s.p.y + Math.sin(time * s.v + s.s) * 0.6, s.p.z)
+      d.rotation.set(time * s.v + s.s, time * 0.7 + s.s, s.s)
+      d.scale.setScalar(fly)
+      d.updateMatrix()
+      scraps.setMatrixAt(i, d.matrix)
+    })
+    scraps.instanceMatrix.needsUpdate = true
+
+    // ---- the camera: across the debris
     state.leap = 0
-    if (f < 0.4) {
-      // Running across the top of this rock, the step bobbing.
-      const k = f / 0.4
-      a.copy(A.top).addScaledVector(fwd, -A.r * 0.55)
-      b.copy(A.top).addScaledVector(fwd, A.r * 0.7)
-      pos.lerpVectors(a, b, k)
-      pos.y += EYE + Math.abs(Math.sin(k * Math.PI * 4)) * 0.08
-      look.copy(B.top).setY(B.top.y + EYE * 0.6)
+    state.riding = 0
+    state.shake = 0
+    const n = path.length
+    const seg = clamp01(run) * (n - 1)
+    const i = Math.min(Math.floor(seg), n - 2)
+    const f = seg - i
+    topOf(path[i], a)
+    topOf(path[i + 1], b)
+    fwd.subVectors(b, a).setY(0).normalize()
+    if (f < 0.42) {
+      const k = f / 0.42
+      pos.lerpVectors(a.clone().addScaledVector(fwd, -2.2), a.clone().addScaledVector(fwd, 2.6), k)
+      pos.y += EYE + Math.abs(Math.sin(k * Math.PI * 5)) * 0.07 - smooth(0.8, 1, k) * 0.35
+      look.copy(b).setY(b.y + EYE * 0.7)
     } else {
-      // The leap: off the edge, an arc through the air, down onto the next.
-      const k = easeInOut((f - 0.4) / 0.6)
-      a.copy(A.top).addScaledVector(fwd, A.r * 0.7)
-      b.copy(B.top).addScaledVector(fwd, -B.r * 0.55)
-      pos.lerpVectors(a, b, k)
-      pos.y += EYE + Math.sin(k * Math.PI) * (2.4 + Math.max(B.top.y - A.top.y, 0)) - Math.sin(k * Math.PI) * 0.2
-      // A dip as the legs take the landing.
-      pos.y -= smooth(0.85, 0.95, k) * (1 - smooth(0.95, 1, k)) * 0.35
-      look.copy(B.top).addScaledVector(fwd, B.r * 2).setY(B.top.y + EYE * (0.3 + 0.5 * Math.sin(k * Math.PI)))
+      const k = easeInOut((f - 0.42) / 0.58)
+      pos.lerpVectors(a.clone().addScaledVector(fwd, 2.6), b.clone().addScaledVector(fwd, -2.2), k)
+      pos.y += EYE + Math.sin(k * Math.PI) * (2.6 + Math.max(b.y - a.y, 0)) - 0.35 * (1 - smooth(0, 0.15, k))
+      pos.y -= smooth(0.86, 0.95, k) * (1 - smooth(0.95, 1, k)) * 0.45
+      look.copy(b).addScaledVector(fwd, 6).setY(b.y + EYE * (0.2 + 0.6 * Math.sin(k * Math.PI)))
       state.leap = Math.sin(k * Math.PI)
+      state.shake = smooth(0.9, 0.95, k) * (1 - smooth(0.95, 1, k))
     }
-    // The drop: off the last rock, forward, then straight down, turning to look below.
-    state.falling = fall
+    // Before the run: from the assembled page out to the first piece.
+    if (run <= 0.0001 && ride <= 0 && fall <= 0) {
+      const k = easeInOut(clamp01((cut - 1.6) / 2.4))
+      topOf(path[0], a)
+      topOf(path[1], b)
+      fwd.subVectors(b, a).setY(0).normalize()
+      const start = a.clone().addScaledVector(fwd, -2.2).setY(a.y + EYE)
+      pos.copy(pageCam).lerp(start, k)
+      look.set(0, 0, 0).lerp(b.clone().setY(b.y + EYE * 0.7), k)
+    }
+
+    // Matsya swims up under the last piece; you ride it; you leap.
+    const swimU = ride > 0 ? ride : Math.max(run - 0.82, 0) * 0.5
+    swimPath(swimU, matsya.group.position)
+    swimPath(swimU + 0.01, b)
+    matsya.group.lookAt(b)
+    matsya.group.rotateY(-Math.PI / 2)
+    matsya.swim(dt, 0.6 + ride, 1)
+    matsya.group.visible = run > 0.6 || ride > 0 || fall > 0
+    if (ride > 0) {
+      state.riding = 1
+      swimPath(ride, a)
+      swimPath(ride + 0.02, b)
+      const onto = smooth(0, 0.2, ride)
+      const back = new THREE.Vector3(0, KOI * 0.13 + EYE * 0.9, 0)
+      const ahead = b.clone().sub(a).normalize()
+      pos.lerp(a.clone().add(back).addScaledVector(ahead, -KOI * 0.1), onto)
+      look.lerp(b.clone().add(back).addScaledVector(ahead, 10), onto)
+      state.leap = 0.3
+    }
+    state.dark = smooth(0.55, 0.95, fall)
     if (fall > 0) {
-      const last = path[ROCKS - 1]
-      const out = smooth(0, 0.25, fall)
-      const down = Math.pow(clamp01((fall - 0.1) / 0.9), 1.8)
-      pos.copy(last.top).addScaledVector(fwd, last.r * 0.7 + out * 3).setY(last.top.y + EYE + Math.sin(out * Math.PI) * 1.2 - down * 90)
-      const tilt = smooth(0.12, 0.45, fall)
-      look.copy(pos).addScaledVector(fwd, 4 * (1 - tilt) + 0.01).setY(pos.y - 4 * tilt - 0.5)
-      state.leap = 0.6 + 0.4 * smooth(0.1, 0.4, fall)
+      swimPath(1, a)
+      const off = smooth(0, 0.2, fall)
+      const down = Math.pow(clamp01((fall - 0.08) / 0.92), 1.7)
+      pos.copy(a).add(new THREE.Vector3(0, KOI * 0.13 + EYE + Math.sin(off * Math.PI) * 3 - down * 130, -off * 8))
+      const tilt = smooth(0.1, 0.45, fall)
+      look.copy(pos).add(new THREE.Vector3(0, -6 * tilt - 0.2, -6 * (1 - tilt) - 0.01))
+      state.leap = 0.7
     }
     camera.position.copy(pos)
+    if (state.shake > 0) camera.position.y += (Math.random() - 0.5) * 0.14 * state.shake
     camera.up.set(0, 1, 0)
     camera.lookAt(look)
-    // Into the dark as the fall goes on.
-    state.dark = smooth(0.55, 0.95, fall)
-    ;(scene.background as THREE.Color).copy(paper).lerp(black, state.dark)
-    uniforms.uFogColor.value.copy(scene.background as THREE.Color)
-    uniforms.uFog.value = 0.012 + 0.05 * state.dark
+    camera.fov = 50 + 14 * state.leap * (run > 0 || fall > 0 || ride > 0 ? 1 : 0) + 10 * smooth(0.3, 1, fall)
+    camera.updateProjectionMatrix()
+    skyUniforms.uDark.value = state.dark
+    shared.uHazeK.value = 0.006 + 0.02 * state.dark
+    haze.set(P.skyLow).lerp(new THREE.Color('#050506'), state.dark)
+    clouds.forEach((c) => (c.material.opacity = 1 - state.dark))
     renderer.render(scene, camera)
   }
 
   return {
     setSize,
+    build,
     render,
     state,
     dispose() {

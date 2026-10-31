@@ -459,6 +459,19 @@ export function createStage(canvas: HTMLCanvasElement) {
     },
     playIntro,
     advance,
+    // The landing as it looks now, as one picture: the frame, and the drawn
+    // layer multiplied into it (the forge tears it into debris).
+    capture() {
+      draw()
+      const c = document.createElement('canvas')
+      c.width = canvas.width
+      c.height = canvas.height
+      const g = c.getContext('2d')!
+      g.drawImage(canvas, 0, 0)
+      g.globalCompositeOperation = 'multiply'
+      g.drawImage(sketchLayer.canvas, 0, 0, c.width, c.height)
+      return c
+    },
     setPaused(on: boolean) {
       paused = on
       sketchLayer.canvas.style.visibility = on ? 'hidden' : ''

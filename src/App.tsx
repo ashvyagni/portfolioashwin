@@ -30,6 +30,7 @@ export default function App() {
       }
       w.toForge = () => {
         stage.arrive()
+        setLandingShot(stage.capture())
         setPhase('forge')
       }
     }
@@ -115,7 +116,9 @@ export default function App() {
   }, [phase, skip])
 
   // Down from the landing into the forge (and back up out of it).
+  const [landingShot, setLandingShot] = useState<HTMLCanvasElement | null>(null)
   const descend = useCallback(() => {
+    setLandingShot(stageRef.current?.capture() ?? null)
     setPhase('forge')
     window.setTimeout(() => stageRef.current?.setPaused(true), 1400)
   }, [])
@@ -173,7 +176,7 @@ export default function App() {
         </button>
       )}
       {phase === 'landing' && stageRef.current && <Landing muted={muted} onToggleSound={toggleSound} companion={stageRef.current.companion} onDescend={descend} />}
-      {phase === 'forge' && <Forge onBack={ascend} />}
+      {phase === 'forge' && <Forge onBack={ascend} landing={landingShot} />}
     </>
   )
 }

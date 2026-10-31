@@ -1,62 +1,126 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { createDescent } from '../forge/descent'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createDescent, EYE_CUT, EYE_LENGTH, SPIRAL_END } from '../forge/descent'
+import { createSky } from '../forge/sky'
+import { createFluid } from '../forge/fluid'
 import { createWaves } from '../forge/waves'
 import { createPortrait } from '../forge/portrait'
+import { createOrbit } from '../forge/orbit'
 import { loadReadme, loadRepos, type Repo } from '../forge/github'
+import { labelOf, prettyName } from '../forge/names'
 import { CONTACT, MILESTONES, TREE } from '../content/forge'
+import { Cursor, setCursor } from './Cursor'
+import { Brush, Decode, Rise } from './Reveal'
+import { Matsya } from './Matsya'
 
-// Phase two, as one long scroll: the descent (spiral, tree, the eye, the sky,
-// the fall), the landing in the black fluid, and the forge on it — the
-// portrait in dots, the projects circling a figure on a red disc, then all of
-// them in a list, each opening onto its README. Then a way to write.
+// Phase two, as one scroll. Fixed layers draw whatever part you are in; the
+// sections in the page only set how far along each part is.
+//
+//   descent  the spiral, the tree                 (descent.ts, 2D)
+//            → the eye and its rays: a cutscene on its own clock, the scroll
+//              held while it plays; the page is cut and handed to the sky
+//   sky      the debris, Matsya, the fall         (sky.ts, 3D)
+//            → the fluid: a cutscene too, in your own eyes (fluid.ts)
+//   title    the forge's title card; your face in dots, the camera pulling back
+//   orbit    the sword saint                       (orbit.ts, 3D)
+//   list     everything, from GitHub; each opens to its own page
+//   contact
 
-type Props = { onBack: () => void }
+type Props = { onBack: () => void; landing: HTMLCanvasElement | null }
+type Stage = 'spiral' | 'tree' | 'eye' | 'sky' | 'ride' | 'fluid' | 'forge' | 'orbit' | 'list'
 
+const LINES: Record<Stage, string | null> = {
+  spiral: 'Down the spiral. Each seal on the way is something he did.',
+  tree: 'His tree. Every tag a field he works in; the slips, his tools.',
+  eye: 'Look up.',
+  sky: 'Run. I’ll be under the last piece.',
+  ride: 'On my back — now jump!',
+  fluid: null,
+  forge: 'The forge. What he pushes to GitHub ends up here.',
+  orbit: 'Pick a blade.',
+  list: 'All of them. Open any.',
+}
+const SEGMENTS: { stage: Stage[]; name: string }[] = [
+  { stage: ['spiral'], name: 'Spiral' },
+  { stage: ['tree', 'eye'], name: 'Tree' },
+  { stage: ['sky', 'ride', 'fluid'], name: 'Sky' },
+  { stage: ['forge', 'orbit'], name: 'Forge' },
+  { stage: ['list'], name: 'Work' },
+]
 const ORBIT_COUNT = 14
+const clamp01 = (x: number) => Math.min(Math.max(x, 0), 1)
+const ease = (x: number) => {
+  const t = clamp01(x)
+  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2
+}
 
-export function Forge({ onBack }: Props) {
+export function Forge({ onBack, landing }: Props) {
   const scroller = useRef<HTMLDivElement>(null)
-  const descentRef = useRef<HTMLElement>(null)
-  const flatRef = useRef<HTMLCanvasElement>(null)
-  const glRef = useRef<HTMLCanvasElement>(null)
-  const wavesRef = useRef<HTMLCanvasElement>(null)
-  const portraitRef = useRef<HTMLCanvasElement>(null)
-  const portraitSection = useRef<HTMLElement>(null)
-  const orbitSection = useRef<HTMLElement>(null)
-  const ringRef = useRef<HTMLDivElement>(null)
-  const hintRef = useRef<HTMLParagraphElement>(null)
-  const cardRefs = useRef<(HTMLButtonElement | null)[]>([])
+  const descentSec = useRef<HTMLElement>(null)
+  const skySec = useRef<HTMLElement>(null)
+  const titleSec = useRef<HTMLElement>(null)
+  const orbitSec = useRef<HTMLElement>(null)
+  const wavesCv = useRef<HTMLCanvasElement>(null)
+  const orbitCv = useRef<HTMLCanvasElement>(null)
+  const portraitCv = useRef<HTMLCanvasElement>(null)
+  const skyCv = useRef<HTMLCanvasElement>(null)
+  const descentCv = useRef<HTMLCanvasElement>(null)
+  const fluidCv = useRef<HTMLCanvasElement>(null)
+  const pctRef = useRef<HTMLSpanElement>(null)
   const [repos, setRepos] = useState<Repo[] | null>(null)
-  const [landed, setLanded] = useState(false)
-  const [open, setOpen] = useState<Repo | null>(null)
+  const [stage, setStage] = useState<Stage>('spiral')
+  const [open, setOpen] = useState<number | null>(null)
+  const [clock, setClock] = useState('')
+  const orbitApi = useRef<ReturnType<typeof createOrbit> | null>(null)
 
   useEffect(() => {
     loadRepos().then(setRepos, () => setRepos([]))
   }, [])
+  const orbitRepos = useMemo(() => (repos ?? []).filter((r) => !r.fork).slice(0, ORBIT_COUNT), [repos])
+  useEffect(() => orbitApi.current?.setRepos(orbitRepos), [orbitRepos])
 
-  const orbit = useMemo(() => (repos ?? []).filter((r) => !r.fork).slice(0, ORBIT_COUNT), [repos])
+  // The time in Vellore, for the corner.
+  useEffect(() => {
+    const tick = () => setClock(new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' }).format(new Date()))
+    tick()
+    const id = window.setInterval(tick, 20000)
+    return () => window.clearInterval(id)
+  }, [])
+
+  const openRepo = useCallback(
+    (r: Repo) => {
+      const i = (repos ?? []).indexOf(r)
+      if (i >= 0) setOpen(i)
+    },
+    [repos],
+  )
+  const openRef = useRef(openRepo)
+  useEffect(() => {
+    openRef.current = openRepo
+  }, [openRepo])
 
   useEffect(() => {
     const el = scroller.current!
-    const descent = createDescent(flatRef.current!, glRef.current!)
-    const waves = createWaves(wavesRef.current!)
-    const portrait = createPortrait(portraitRef.current!)
-    let landedAt = -1
-    descent.onLanded(() => {
-      landedAt = performance.now() / 1000
-      setLanded(true)
-      el.style.overflowY = ''
-    })
+    const descent = createDescent(descentCv.current!)
+    const sky = createSky(skyCv.current!)
+    const fluid = createFluid(fluidCv.current!)
+    const waves = createWaves(wavesCv.current!)
+    const portrait = createPortrait(portraitCv.current!)
+    const orbit = createOrbit(orbitCv.current!, (r) => openRef.current(r), (on) => setCursor(on ? 'open' : 'default'))
+    orbitApi.current = orbit
     const resize = () => {
-      const w = window.innerWidth
-      const h = window.innerHeight
+      const w = innerWidth
+      const h = innerHeight
       descent.resize(w, h)
+      sky.setSize(w, h)
+      fluid.resize(w, h)
       waves?.resize(w, h)
       portrait?.resize(w, h)
+      orbit.setSize(w, h)
     }
     resize()
     window.addEventListener('resize', resize)
     const pointer = { x: -9999, y: -9999 }
+    const start = performance.now() / 1000
     const onMove = (e: PointerEvent) => {
       pointer.x = e.clientX
       pointer.y = e.clientY
@@ -68,60 +132,114 @@ export function Forge({ onBack }: Props) {
     }
     el.addEventListener('wheel', onWheel, { passive: true })
 
-    const start = performance.now() / 1000
+    let eyeAt = -1
+    let cutAt = -1
+    let eyeDone = false
+    let fluidAt = -1
+    let fluidDone = false
+    let landedAt = -1
+    let current: Stage = 'spiral'
+    const hold = (on: boolean) => (el.style.overflowY = on ? 'hidden' : '')
+    const show = (c: HTMLCanvasElement | null, on: boolean) => {
+      if (c) c.style.visibility = on ? 'visible' : 'hidden'
+    }
+    const progress = (sec: HTMLElement) => clamp01((el.scrollTop - sec.offsetTop) / Math.max(sec.offsetHeight - innerHeight, 1))
+
     let raf = 0
     const loop = () => {
       raf = requestAnimationFrame(loop)
       const time = performance.now() / 1000 - start
-      const vh = window.innerHeight
+      const vh = innerHeight
       const top = el.scrollTop
-      const dEl = descentRef.current!
-      const span = dEl.offsetHeight - vh
-      const p = Math.min(Math.max(top / span, 0), 1)
-      if (top < dEl.offsetHeight) descent.render(p, time)
-      if (hintRef.current) hintRef.current.style.opacity = p < 0.02 ? '' : '0'
-      // Hold the scroll while the landing cutscene plays.
-      if (descent.playing()) el.style.overflowY = 'hidden'
-      // Past the descent by some other way (a jump to the end): the fluid is there all the same.
-      if (landedAt < 0 && top > dEl.offsetHeight - vh * 0.5 && !descent.playing() && p >= 1) {
-        landedAt = performance.now() / 1000
-        setLanded(true)
+      const dP = progress(descentSec.current!)
+      const sP = progress(skySec.current!)
+      const tP = progress(titleSec.current!)
+      const oP = progress(orbitSec.current!)
+      const skyTop = skySec.current!.offsetTop
+      const titleTop = titleSec.current!.offsetTop
+      const orbitEl = orbitSec.current!
+
+      // ---- the descent, and the eye's cutscene at its end
+      if (!eyeDone && eyeAt < 0 && dP >= 0.999) {
+        eyeAt = time
+        hold(true)
       }
-      // The fluid: up as soon as you are in it.
-      const sinceLand = landedAt < 0 ? 0 : performance.now() / 1000 - landedAt
-      const appear = Math.min(sinceLand / 2.5, 1)
-      if (landedAt >= 0 && waves) waves.render(time, appear)
-      // The portrait gathers as its section comes in.
-      const ps = portraitSection.current!
-      const pr = ps.getBoundingClientRect()
-      const gather = Math.min(Math.max(1 - pr.top / vh, 0), 1)
-      if (portrait && pr.top < vh && pr.bottom > 0) portrait.render(time, pointer, gather)
-      // The orbit.
-      const os = orbitSection.current!
-      const orr = os.getBoundingClientRect()
-      const q = Math.min(Math.max(-orr.top / (os.offsetHeight - vh), 0), 1)
-      const ring = ringRef.current
-      if (ring && orr.top < vh && orr.bottom > 0) {
-        const n = cardRefs.current.length
-        const small = window.innerWidth < 700
-        const R = small ? 230 : 460
-        // In through the middle, round, and out again to the list.
-        const into = Math.min(q / 0.15, 1)
-        const outro = Math.max((q - 0.85) / 0.15, 0)
-        const scale = (1.9 - 0.9 * easeOut(into)) * (1 - 0.55 * easeOut(outro))
-        ring.style.transform = `translate(-50%, -50%) scale(${scale}) rotateX(-9deg)`
-        ring.style.opacity = String(1 - outro)
-        cardRefs.current.forEach((card, i) => {
-          if (!card) return
-          const a = (i / Math.max(n, 1)) * Math.PI * 2 - q * Math.PI * 3.2
-          const y = (i - (n - 1) / 2) * (small ? 26 : 40) - (q - 0.5) * (small ? 160 : 260)
-          const facing = Math.cos(a)
-          card.style.transform = `translate(-50%, -50%) rotateY(${(a * 180) / Math.PI}deg) translateZ(${R}px) translateY(${y}px)`
-          card.style.opacity = String(facing > 0 ? 0.3 + 0.7 * facing : 0.14 + 0.16 * (1 + facing))
-          card.style.zIndex = String(Math.round(100 + facing * 100))
-          card.tabIndex = facing > 0.3 ? 0 : -1
-        })
+      const eyeT = eyeAt < 0 ? -1 : time - eyeAt
+      if (eyeT >= EYE_CUT && cutAt < 0) {
+        const snap = descent.snapshot(time)
+        sky.build(snap.canvas, landing, snap.cross)
+        cutAt = time
       }
+      if (eyeT >= EYE_LENGTH && !eyeDone) {
+        eyeDone = true
+        hold(false)
+      }
+      const inDescent = top < skyTop - vh * 0.02
+      const eyePlaying = eyeAt >= 0 && !eyeDone
+      // ---- the sky
+      const run = clamp01(sP / 0.72)
+      const ride = clamp01((sP - 0.72) / 0.16)
+      const fall = clamp01((sP - 0.88) / 0.12)
+      const skyOn = cutAt >= 0 && top < titleTop && (eyeT >= EYE_CUT || !inDescent || dP >= 0.999)
+      // ---- the fluid
+      if (!fluidDone && fluidAt < 0 && fall >= 0.999) {
+        fluidAt = time
+        hold(true)
+      }
+      let fluidOn = false
+      if (fluidAt >= 0 && !fluidDone) {
+        fluidOn = fluid.render(time - fluidAt, time)
+        if (!fluidOn) {
+          fluidDone = true
+          landedAt = time
+          hold(false)
+          el.scrollTo({ top: titleTop, behavior: 'smooth' })
+        }
+      }
+      // Past it all some other way (a jump to the end): the forge is simply there.
+      if (landedAt < 0 && top >= titleTop - vh * 0.5) {
+        landedAt = time
+        fluidDone = true
+        eyeDone = true
+        hold(false)
+      }
+
+      // ---- drawing
+      const drawDescent = (inDescent && !(eyeDone && dP >= 0.999)) || eyePlaying
+      show(descentCv.current, drawDescent)
+      if (eyePlaying) descent.renderEye(eyeT, time)
+      else if (drawDescent) descent.render(dP, time)
+      show(skyCv.current, skyOn && !fluidOn)
+      if (skyOn && !fluidOn) sky.render(Math.max(time - cutAt, 0), run, ride, fall, time)
+      // Speed lines over the leaps and the fall.
+      const lines = skyOn && !fluidOn ? Math.max(sky.state.leap - 0.35, 0) * 1.6 + fall * 0.8 : 0
+      if (!fluidOn) fluid.speed(lines, fall, time)
+      show(fluidCv.current, fluidOn || lines > 0.05)
+      const wavesOn = landedAt >= 0 && top > titleTop - vh
+      show(wavesCv.current, wavesOn)
+      if (wavesOn && waves) waves.render(time, clamp01((time - landedAt) / 2.5))
+      // The title card alone on the fluid first; then the dots gather, close
+      // on the eyes, and the camera pulls back to the whole face.
+      const portraitOn = tP > 0.1 && tP < 1
+      show(portraitCv.current, portraitOn)
+      if (portraitOn && portrait) portrait.render(time, pointer, clamp01((tP - 0.1) / 0.22), 5 - 4 * ease((tP - 0.34) / 0.5))
+      const orbitOn = top > orbitEl.offsetTop - vh && top < orbitEl.offsetTop + orbitEl.offsetHeight
+      show(orbitCv.current, orbitOn)
+      if (orbitOn) orbit.render(oP, time)
+
+      // ---- where we are
+      let next: Stage
+      if (eyePlaying) next = 'eye'
+      else if (inDescent) next = dP < SPIRAL_END ? 'spiral' : 'tree'
+      else if (top < titleTop - vh * 0.5) next = fluidOn ? 'fluid' : ride > 0 || fall > 0 ? 'ride' : 'sky'
+      else if (top < orbitEl.offsetTop - vh * 0.3) next = 'forge'
+      else if (top < orbitEl.offsetTop + orbitEl.offsetHeight - vh) next = 'orbit'
+      else next = 'list'
+      if (next !== current) {
+        current = next
+        setStage(next)
+      }
+      if (pctRef.current) pctRef.current.textContent = String(Math.round((top / Math.max(el.scrollHeight - vh, 1)) * 100)).padStart(3, '0')
     }
     loop()
     return () => {
@@ -129,23 +247,53 @@ export function Forge({ onBack }: Props) {
       window.removeEventListener('resize', resize)
       window.removeEventListener('pointermove', onMove)
       el.removeEventListener('wheel', onWheel)
-      descent.dispose()
+      sky.dispose()
+      orbit.dispose()
+      orbitApi.current = null
     }
-  }, [onBack])
+  }, [onBack, landing])
+
+  const seg = Math.max(
+    SEGMENTS.findIndex((s) => s.stage.includes(stage)),
+    0,
+  )
+  const all = repos ?? []
+  const tone = stage === 'spiral' ? 'paper' : 'dark'
 
   return (
     <div className="forge" ref={scroller}>
-      <canvas className="forge__waves" ref={wavesRef} aria-hidden="true" style={{ opacity: landed ? 1 : 0 }} />
+      <div className="forge__layers" aria-hidden="true">
+        <canvas ref={wavesCv} />
+        <canvas ref={orbitCv} />
+        <canvas ref={portraitCv} />
+        <canvas ref={skyCv} />
+        <canvas ref={descentCv} />
+        <canvas ref={fluidCv} />
+      </div>
 
-      <section className="descent" ref={descentRef} aria-label="The descent">
-        <div className="descent__view">
-          <canvas className="descent__sky" ref={glRef} aria-hidden="true" />
-          <canvas className="descent__flat" ref={flatRef} aria-hidden="true" />
-          <p className="descent__hint" aria-hidden="true" ref={hintRef}>
-            scroll — down the spiral
-          </p>
-        </div>
-        {/* What the drawing shows, for anyone not seeing it. */}
+      <header className={`hud hud--${tone}`}>
+        <span className="hud__name">
+          Ashwin <i>·</i> 鍛冶場
+        </span>
+        <ol className="hud__segments" aria-label="Where you are">
+          {SEGMENTS.map((s, i) => (
+            <li key={s.name} className={i < seg ? 'is-past' : i === seg ? 'is-now' : ''}>
+              <span className="visually-hidden">{s.name}</span>
+            </li>
+          ))}
+        </ol>
+        <span className="hud__pct">
+          <span ref={pctRef}>000</span> ↓
+        </span>
+      </header>
+      <footer className={`hud hud--bottom hud--${tone}`}>
+        <span>
+          02.{seg + 1} / {SEGMENTS[seg].name}
+        </span>
+        <span>{clock} IST · Vellore</span>
+      </footer>
+
+      <section className="sec sec--descent" ref={descentSec} aria-label="The descent">
         <div className="visually-hidden">
           <h2>Milestones</h2>
           <ul>
@@ -155,7 +303,7 @@ export function Forge({ onBack }: Props) {
               </li>
             ))}
           </ul>
-          <h2>The tree of wisdom — what I work with</h2>
+          <h2>The tree of wisdom</h2>
           <ul>
             {TREE.map((b) => (
               <li key={b.name}>
@@ -165,170 +313,165 @@ export function Forge({ onBack }: Props) {
           </ul>
         </div>
       </section>
+      <section className="sec sec--sky" ref={skySec} aria-label="The fall" />
 
-      <section className="forge__portrait" ref={portraitSection} aria-labelledby="forge-title">
-        <canvas className="forge__portrait-dots" ref={portraitRef} aria-hidden="true" />
-        <div className="forge__intro">
-          <p className="forge__eyebrow">(02) — the forge</p>
-          <h2 id="forge-title">
-            Where the things
-            <br />I build <em>rest</em>.
+      <section className="sec sec--title" ref={titleSec} aria-labelledby="forge-title">
+        <div className="title-card">
+          <Decode className="title-card__chapter" text="第二章 · CHAPTER II" />
+          <h2 id="forge-title" className="title-card__kanji" lang="ja">
+            <Brush text="鍛冶場" />
           </h2>
-          <p className="forge__lede">
-            Everything I have put on GitHub lands here on its own — research models, engines, simulations, tools, and the odd game. Scroll, and they come round.
-          </p>
+          <Brush as="p" className="title-card__name" text="The Forge" delay={0.3} />
         </div>
       </section>
 
-      <section className="forge__orbit" ref={orbitSection} aria-label="Projects, circling">
-        <div className="orbit__stage">
-          <div className="orbit__ring" ref={ringRef}>
-            <Figure />
-            {orbit.map((r, i) => (
-              <button key={r.name} className="orbit__card" ref={(el) => void (cardRefs.current[i] = el)} onClick={() => setOpen(r)}>
-                <span className="orbit__num">{String(i + 1).padStart(2, '0')}</span>
-                <span className="orbit__name">{r.name}</span>
-                <span className="orbit__desc">{r.description ?? 'no description yet — open it to read the README'}</span>
-                <span className="orbit__meta">
-                  {r.language ?? '—'} · {new Date(r.pushed_at).getFullYear()}
-                </span>
-              </button>
-            ))}
-          </div>
-          <p className="orbit__vertical" aria-hidden="true">
-            鍛冶場 · THE FORGE
+      <section className="sec sec--orbit" ref={orbitSec} aria-label="Projects">
+        <div className="orbit-ui">
+          <p className="orbit-ui__vertical" lang="ja">
+            作品 <span>· WORKS</span>
           </p>
+          <Decode className="orbit-ui__hint" text={`${orbitRepos.length} BLADES · SCROLL TO TURN · CLICK TO DRAW`} />
         </div>
-      </section>
-
-      <section className="forge__list" aria-labelledby="built-title">
-        <header className="list__head">
-          <h2 id="built-title">
-            Things I&rsquo;ve <em>built</em>
-          </h2>
-          <span className="list__count">({repos ? String(repos.length).padStart(2, '0') : '··'})</span>
-        </header>
-        {repos === null && <p className="list__loading">pulling from github…</p>}
-        <ol className="list__rows">
-          {(repos ?? []).map((r, i) => (
+        <ul className="visually-hidden">
+          {orbitRepos.map((r) => (
             <li key={r.name}>
-              <button className="row" onClick={() => setOpen(r)}>
-                <span className="row__num">{String(i + 1).padStart(2, '0')}</span>
-                <span className="row__name">{r.name}</span>
-                <span className="row__meta">
-                  {[r.language, ...(r.topics ?? []).slice(0, 2), r.fork ? 'fork' : null].filter(Boolean).join(' · ') || '—'}
-                </span>
-                <span className="row__year">{new Date(r.pushed_at).getFullYear()}</span>
-                <span className="row__arrow" aria-hidden="true">
-                  →
-                </span>
-                <span className="row__open" aria-hidden="true">
-                  open
-                </span>
-              </button>
+              <button onClick={() => openRepo(r)}>{prettyName(r.name)}</button>
             </li>
           ))}
-        </ol>
+        </ul>
       </section>
 
-      <footer className="forge__contact">
-        <p className="forge__eyebrow">(03) — write to me</p>
-        <a className="contact__mail" href={`mailto:${CONTACT.email}`}>
+      <section className="sec sec--list" aria-labelledby="built-title">
+        <div className="marquee" aria-hidden="true">
+          <div>
+            {Array.from({ length: 10 }, (_, i) => (
+              <span key={i}>
+                鍛冶場 · SELECTED WORK <b>▶▶▶</b>
+              </span>
+            ))}
+          </div>
+        </div>
+        <div className="list">
+          <Decode className="list__eyebrow" text="■ 02 — EVERYTHING ON GITHUB" />
+          <h2 id="built-title" className="list__title">
+            <Brush text="Things I’ve" /> <em>built</em>
+            <sup>({String(all.length).padStart(2, '0')})</sup>
+          </h2>
+          {repos === null && <p className="list__loading">pulling from github…</p>}
+          <ol className="rows">
+            {all.map((r, i) => (
+              <li key={r.name}>
+                <button className="row" onClick={() => setOpen(i)} data-cursor="open" data-cursor-label="open">
+                  <span className="row__num">{String(i + 1).padStart(2, '0')}</span>
+                  <span className="row__name">{prettyName(r.name)}</span>
+                  <span className="row__meta">{labelOf(r)}</span>
+                  <span className="row__year">{new Date(r.pushed_at).getFullYear()}</span>
+                  <span className="row__arrow" aria-hidden="true">
+                    ↗
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ol>
+        </div>
+      </section>
+
+      <footer className="sec sec--contact">
+        <Decode className="list__eyebrow" text="■ 03 — WRITE TO ME" />
+        <a className="contact__mail" href={`mailto:${CONTACT.email}`} data-cursor="open" data-cursor-label="write">
           {CONTACT.email}
         </a>
         <div className="contact__row">
-          <a href={CONTACT.github} target="_blank" rel="noopener noreferrer">
-            github.com/{CONTACT.githubUser}
+          <a href={CONTACT.github} target="_blank" rel="noopener noreferrer" data-cursor="open" data-cursor-label="github">
+            github.com/{CONTACT.githubUser} ↗
           </a>
-          <span>Ashwin Dandotiya · VIT Vellore</span>
+          <span>Ashwin Dandotiya · B.Tech CSE (AI/ML), VIT Vellore</span>
         </div>
       </footer>
 
-      {open && <Readme repo={open} onClose={() => setOpen(null)} />}
+      <a className={`hello${stage === 'list' ? ' is-on' : ''}`} href={`mailto:${CONTACT.email}`} data-cursor="open" data-cursor-label="write">
+        Say hello
+      </a>
+      <Matsya line={LINES[stage]} hidden={stage === 'ride' || stage === 'fluid' || open !== null} />
+      {open !== null && all[open] && <Project repos={all} index={open} onGo={setOpen} onClose={() => setOpen(null)} />}
+      <Cursor />
     </div>
   )
 }
 
-const easeOut = (x: number) => 1 - Math.pow(1 - Math.min(Math.max(x, 0), 1), 3)
-
-// The figure at the centre of the orbit: drawn in white ink, standing on a red disc.
-function Figure() {
-  return (
-    <svg className="orbit__figure" viewBox="0 0 200 320" aria-hidden="true">
-      <defs>
-        <filter id="boil">
-          <feTurbulence type="fractalNoise" baseFrequency="0.035" numOctaves="2" seed="1">
-            <animate attributeName="seed" values="1;2;3;4" dur="0.5s" calcMode="discrete" repeatCount="indefinite" />
-          </feTurbulence>
-          <feDisplacementMap in="SourceGraphic" scale="3" />
-        </filter>
-      </defs>
-      <ellipse cx="100" cy="292" rx="88" ry="20" fill="#d4241c" />
-      <ellipse cx="100" cy="292" rx="88" ry="20" fill="none" stroke="#1a0a08" strokeWidth="1.5" />
-      <g filter="url(#boil)" fill="none" stroke="#f1ece2" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-        {/* Head, from behind: hair. */}
-        <path d="M86 52 C84 30 116 28 115 50 C116 64 106 72 100 72 C93 72 87 64 86 52 Z" fill="#0a0a0a" />
-        <path d="M88 40 C94 34 104 33 112 40 M90 46 C98 42 106 42 113 47" strokeWidth="1.2" />
-        {/* Shoulders and back. */}
-        <path d="M100 72 L100 80 M72 92 C80 82 120 82 128 92 L132 150 C130 160 124 168 122 176 L78 176 C76 168 70 160 68 150 Z" fill="#0a0a0a" />
-        <path d="M100 86 L100 170" strokeWidth="1" />
-        {/* Arms hanging. */}
-        <path d="M72 94 C64 120 64 146 66 172 M128 94 C136 120 136 146 134 172" />
-        {/* Legs. */}
-        <path d="M80 176 C82 210 84 246 86 286 M120 176 C118 210 116 246 114 286 M100 186 L100 200" />
-        <path d="M84 286 L94 288 M106 288 L116 286" />
-      </g>
-    </svg>
-  )
-}
-
-function Readme({ repo, onClose }: { repo: Repo; onClose: () => void }) {
+// A project's own page: its name large, what it is in a line, the facts in
+// a row, the README in full, and the next one.
+function Project({ repos, index, onGo, onClose }: { repos: Repo[]; index: number; onGo: (i: number) => void; onClose: () => void }) {
+  const repo = repos[index]
+  const nextIndex = (index + 1) % repos.length
   const [html, setHtml] = useState<string | null | undefined>(undefined)
   const panel = useRef<HTMLDivElement>(null)
   useEffect(() => {
     let alive = true
-    setHtml(undefined)
+    panel.current?.scrollTo({ top: 0 })
     loadReadme(repo).then((h) => alive && setHtml(h))
     return () => {
       alive = false
+      setHtml(undefined)
     }
   }, [repo])
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
     window.addEventListener('keydown', onKey)
     panel.current?.focus()
+    setCursor('default')
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
+  const created = new Date(repo.created_at).getFullYear()
+  const pushed = new Date(repo.pushed_at).getFullYear()
   return (
-    <div className="readme" role="dialog" aria-modal="true" aria-labelledby="readme-title" onClick={onClose}>
-      <div className="readme__panel" ref={panel} tabIndex={-1} onClick={(e) => e.stopPropagation()}>
-        <header className="readme__head">
-          <p className="forge__eyebrow">
-            {repo.language ?? '—'} · updated {new Date(repo.pushed_at).toLocaleDateString(undefined, { month: 'short', year: 'numeric' })}
-            {repo.stargazers_count > 0 ? ` · ★ ${repo.stargazers_count}` : ''}
-          </p>
-          <h3 id="readme-title">{repo.name}</h3>
-          {repo.description && <p className="readme__desc">{repo.description}</p>}
-          <div className="readme__links">
-            <a href={repo.html_url} target="_blank" rel="noopener noreferrer">
-              view on github ↗
+    <div className="project" role="dialog" aria-modal="true" aria-labelledby="project-title" ref={panel} tabIndex={-1}>
+      <button className="project__back" onClick={onClose} data-cursor="open" data-cursor-label="back">
+        ← All work
+      </button>
+      <p className="project__eyebrow">
+        ■ {String(index + 1).padStart(2, '0')} — {labelOf(repo)}
+      </p>
+      <h3 id="project-title" className="project__title" key={repo.name}>
+        <Brush text={prettyName(repo.name)} />
+      </h3>
+      {repo.description && <p className="project__lede">{repo.description}</p>}
+      <dl className="project__facts">
+        <div>
+          <dt>Repository</dt>
+          <dd>{repo.name}</dd>
+        </div>
+        <div>
+          <dt>Period</dt>
+          <dd>{created === pushed ? created : `${created} – ${pushed}`}</dd>
+        </div>
+        <div>
+          <dt>Stack</dt>
+          <dd>{[repo.language, ...(repo.topics ?? [])].filter(Boolean).join(' · ') || '—'}</dd>
+        </div>
+        <div>
+          <dt>Links</dt>
+          <dd>
+            <a href={repo.html_url} target="_blank" rel="noopener noreferrer" data-cursor="open" data-cursor-label="source">
+              Source ↗
             </a>
             {repo.homepage && (
-              <a href={repo.homepage} target="_blank" rel="noopener noreferrer">
-                live ↗
+              <a href={repo.homepage} target="_blank" rel="noopener noreferrer" data-cursor="open" data-cursor-label="live">
+                Live ↗
               </a>
             )}
-          </div>
-          <button className="readme__close" onClick={onClose} aria-label="Close">
-            ×
-          </button>
-        </header>
-        <article className="readme__body">
-          {html === undefined && <p className="list__loading">reading the README…</p>}
-          {html === null && <p className="list__loading">This one has no README yet.</p>}
-          {html && <div dangerouslySetInnerHTML={{ __html: html }} />}
-        </article>
-      </div>
+          </dd>
+        </div>
+      </dl>
+      <Rise className="project__readme">
+        {html === undefined && <p className="list__loading">reading the README…</p>}
+        {html === null && <p className="list__loading">No README in this one yet.</p>}
+        {html && <article dangerouslySetInnerHTML={{ __html: html }} />}
+      </Rise>
+      <button className="project__next" onClick={() => onGo(nextIndex)} data-cursor="open" data-cursor-label="next">
+        <span>Next project / {String(nextIndex + 1).padStart(2, '0')}</span>
+        <strong>{prettyName(repos[nextIndex].name)}</strong>
+      </button>
     </div>
   )
 }

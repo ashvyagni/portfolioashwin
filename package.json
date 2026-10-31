@@ -1,0 +1,38 @@
+{
+  "name": "ashportfolio",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "prebuild": "node scripts/snapshot-repos.mjs"
+  },
+  "dependencies": {
+    "@fontsource-variable/inter-tight": "^5.3.0",
+    "@fontsource-variable/jetbrains-mono": "^5.3.0",
+    "@fontsource/cinzel": "^5.3.0",
+    "@fontsource/instrument-serif": "^5.3.0",
+    "@fontsource/kalam": "^5.3.0",
+    "@fontsource/reenie-beanie": "^5.3.0",
+    "@fontsource/rozha-one": "^5.3.0",
+    "@fontsource/tiro-devanagari-sanskrit": "^5.3.0",
+    "@fontsource/zhi-mang-xing": "^5.3.0",
+    "dompurify": "^3.4.17",
+    "gsap": "^3.15.0",
+    "marked": "^18.1.2",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "three": "^0.187.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@types/three": "^0.187.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5"
+  }
+}

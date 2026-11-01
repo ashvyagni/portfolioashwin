@@ -11,6 +11,7 @@ import { createOverlay, drawEyeArt } from '../forge/overlay'
 import { createWaves } from '../forge/waves'
 import { createPortrait } from '../forge/portrait'
 import { createOrbit } from '../forge/orbit'
+import { prepareParkour } from '../forge/parkour'
 import { loadReadme, loadRepos, type Repo } from '../forge/github'
 import { labelOf, prettyName } from '../forge/names'
 import { CONTACT, MILESTONES, TREE } from '../content/forge'
@@ -62,7 +63,8 @@ const EYE_LENGTH = 4.4
 // as long as the song's run-up, which starts from its first second as you
 // leave Matsya — glitching more and more, until the world holds still, the
 // pattern waves spiral in, and on the drop you are in the forge.
-const RUN = 11
+// The run across the world: as long as the course in parkour.ts.
+const RUN = 20.2
 const RIDE = 5
 const LEAP = 1.4
 const STILL = 1.4
@@ -163,6 +165,8 @@ export function Forge({ onBack, landing, score }: Props) {
     const spiral = createSpiral()
     const tree = createTree()
     const sky = createSky()
+    // The sky's world is heavy to make: make it now, in idle moments.
+    prepareParkour()
     const levels = createLevels()
     let analyser: AnalyserNode | null = null
     let audio: HTMLAudioElement | null = null
@@ -353,7 +357,7 @@ export function Forge({ onBack, landing, score }: Props) {
           }
         }
         const rush = fallT >= 0 ? smooth(0.06, 0.8, descend) * (1 - still) : 0
-        world.render(sky.scene, sky.camera, sk, time, { zoom: 0.25 * sky.state.leap + 0.45 * rush, shake: 0.004 * sky.state.shake + 0.005 * rush })
+        world.render(sky.scene, sky.camera, sk, time, { zoom: 0.25 * sky.state.leap + 0.45 * rush, shake: 0.004 * sky.state.shake + 0.005 * rush, flash: sky.state.white })
         if (fallT < 0) overlay.speed(Math.max(sky.state.speed - 9, 0) / 12, time)
         overlay.air(rush, time, false)
         // The new world comes in under the frozen one: the drawing fades as

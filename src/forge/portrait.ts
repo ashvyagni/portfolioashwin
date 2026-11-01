@@ -20,6 +20,8 @@ uniform float uGather;
 uniform float uDpr;
 uniform float uZoom;
 uniform vec2 uFocus;
+uniform float uMax;
+out float vG;
 out float vTone;
 float hash(float n) { return fract(sin(n * 127.1) * 43758.5453); }
 void main() {
@@ -40,22 +42,32 @@ void main() {
   p += vec2(sin(uTime * 0.8 + aSeed), cos(uTime * 0.7 + aSeed * 1.3)) * 0.35;
   vec2 clip = (p / uRes) * 2.0 - 1.0;
   gl_Position = vec4(clip.x, -clip.y, 0.0, 1.0);
-  gl_PointSize = aSize * uDpr * mix(1.0, uZoom, 0.7);
+  // Every cell is drawn whole: a dark ground, the dot of light inside it.
+  gl_PointSize = uMax * 1.02 * uDpr * mix(1.0, uZoom, 0.7);
   vTone = aSize;
+  vG = g;
 }
 `
 const FRAG = `#version 300 es
 precision highp float;
 in float vTone;
+in float vG;
 uniform float uMax;
 out vec4 frag;
 void main() {
+  // A halftone cell on its own dark ground, so the face holds against any
+  // light behind it: the ground is the shadow, the dot the light.
   float d = length(gl_PointCoord - 0.5);
-  float a = 1.0 - smoothstep(0.42, 0.5, d);
   float t = vTone / uMax;
-  vec3 col = mix(vec3(0.72, 0.74, 0.72), vec3(0.97, 0.95, 0.9), t);
+  float r = 0.5 * t;
+  float dotA = 1.0 - smoothstep(r - 0.06, r + 0.02, d);
+  vec3 col = mix(vec3(0.74, 0.72, 0.68), vec3(1.0, 0.97, 0.9), t);
   col = mix(col, vec3(0.55, 0.98, 0.78), smoothstep(0.92, 1.0, t) * 0.35);
-  frag = vec4(col * a, a);
+  vec3 ground = vec3(0.045, 0.02, 0.022);
+  // The ground settles in only once the grains have come home.
+  float ga = 0.9 * smoothstep(0.75, 1.0, vG);
+  float a = max(dotA, ga);
+  frag = vec4(mix(ground * ga, col, dotA), a);
 }
 `
 
@@ -154,7 +166,6 @@ export function createPortrait(canvas: HTMLCanvasElement) {
         if (bg[i]) continue
         const t = Math.pow(sharp[i], 1.25)
         const size = maxSize * (0.12 + 0.88 * t)
-        if (size < pitch * 0.18) continue
         data.push(ox + x * pitch + pitch / 2, oy + y * pitch + pitch / 2, size, i)
       }
     }

@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import { clamp01, easeInOut, easeOut, mulberry32, smooth } from './ink'
 import { createMatsya } from './matsya'
+import { createParkour } from './parkour'
 import { createHero, type HeroMode } from './hero'
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import { sketchState } from './world'
@@ -150,6 +151,14 @@ export function createSky() {
   const sunLight = new THREE.DirectionalLight('#FFE9C8', 2.4)
   sunLight.position.set(30, 40, -20)
   scene.add(sunLight)
+  // His shadow, cast where he runs: a tight frustum that follows him.
+  sunLight.castShadow = true
+  sunLight.shadow.mapSize.set(2048, 2048)
+  Object.assign(sunLight.shadow.camera, { left: -16, right: 16, top: 16, bottom: -16, near: 1, far: 140 })
+  sunLight.shadow.bias = -0.0004
+  sunLight.shadow.normalBias = 0.03
+  scene.add(sunLight.target)
+  const sunDir = new THREE.Vector3(30, 40, -20).normalize()
   const cloudGeo = (seed: number) => {
     const r2 = mulberry32(seed)
     const parts: THREE.BufferGeometry[] = []
@@ -172,6 +181,11 @@ export function createSky() {
   const ray = new THREE.Raycaster()
   const blockers: THREE.Object3D[] = []
   const glideClouds: THREE.Mesh[] = []
+  const park = createParkour(scene, haze)
+  const handPos = new THREE.Vector3()
+  const tipPos = new THREE.Vector3()
+  const restA = new THREE.Vector3()
+  const restB = new THREE.Vector3()
   const routeCentre = new THREE.Vector3()
   const shapes = Array.from({ length: 6 }, (_, i) => cloudGeo(100 + i))
   for (let i = 0; i < 46; i++) {
@@ -191,13 +205,12 @@ export function createSky() {
   scene.add(scraps)
   const d = new THREE.Object3D()
 
-  const hero = createHero()
+  const hero = createHero({ toon: true })
   hero.group.visible = false
   scene.add(hero.group)
   const heroFeet = new THREE.Vector3()
   const lastFeet = new THREE.Vector3()
   const heroVel = new THREE.Vector3()
-  let runPhase = 0
   const matsya = createMatsya()
   matsya.group.scale.setScalar(KOI)
   scene.add(matsya.group)
@@ -206,6 +219,7 @@ export function createSky() {
   const pageGroup = new THREE.Group()
   scene.add(pageGroup)
   blockers.push(pageGroup, ...clouds.slice(0, 16))
+  const baseBlockers = blockers.length
   let path: Piece[] = []
   let aspect = 16 / 9
   const pageCam = new THREE.Vector3()
@@ -357,8 +371,16 @@ export function createSky() {
     routeCentre.set(0, 0, 0)
     path.forEach((p) => routeCentre.add(p.rest.pos))
     routeCentre.divideScalar(path.length)
+    // Past the debris, the world he crosses (parkour.ts).
+    const restTop = (p: Piece, out: THREE.Vector3) => out.copy(p.group.userData.mid as THREE.Vector3).setZ(p.top).applyQuaternion(p.rest.quat).add(p.rest.pos)
+    restTop(path[0], restA)
+    restTop(path[1], restB)
+    park.build(restA, restB)
+    routeCentre.copy(park.centre)
+    blockers.length = baseBlockers
+    blockers.push(...park.blockers)
     // No cloud sits on the route: he must be seen running it.
-    const along: THREE.Vector3[] = []
+    const along: THREE.Vector3[] = [...park.route]
     path.forEach((p, i) => {
       along.push(p.rest.pos)
       if (path[i + 1]) along.push(p.rest.pos.clone().lerp(path[i + 1].rest.pos, 0.5))
@@ -402,7 +424,7 @@ export function createSky() {
   const b = new THREE.Vector3()
   const fwd = new THREE.Vector3()
   const axis = new THREE.Vector3()
-  const state = { leap: 0, dark: 0, shake: 0, riding: 0, landed: 0, speed: 0 }
+  const state = { leap: 0, dark: 0, shake: 0, riding: 0, landed: 0, speed: 0, white: 0 }
   const lastPos = new THREE.Vector3()
   let lastTime = 0
 
@@ -414,8 +436,12 @@ export function createSky() {
 
   // Where Matsya swims, u: 0 … 1.
   const swimPath = (u: number, out: THREE.Vector3) => {
-    topOf(path[path.length - 1], out)
-    return out.set(out.x + Math.sin(u * 2.4) * 16, out.y - 4 + Math.sin(u * 3.1) * 2 - u * 14, out.z - 10 - u * 70)
+    // From under where he lands, on along the way he was going.
+    return out
+      .copy(park.matsyaAt)
+      .add(new THREE.Vector3(0, -KOI * 0.13 + Math.sin(u * 3.1) * 2 - u * 14, 0))
+      .addScaledVector(park.side, Math.sin(u * 2.4) * 16)
+      .addScaledVector(park.dir, u * 70)
   }
 
   // cut: seconds since the page was cut; run: 0 … 1 across the debris;
@@ -490,23 +516,23 @@ export function createSky() {
     }
 
     // Matsya swims up under the last piece; you ride it; you leap.
-    const swimU = ride > 0 ? ride + descend * 0.8 : Math.max(run - 0.82, 0) * 0.5
+    const swimU = ride > 0 ? ride + descend * 0.8 : 0
     swimPath(swimU, matsya.group.position)
     swimPath(swimU + 0.01, b)
     if (descend > 0) matsya.group.position.y -= descend * 10
     matsya.group.lookAt(b)
     matsya.group.rotateY(-Math.PI / 2)
     matsya.swim(dt, 0.6 + ride, 1)
-    matsya.group.visible = run > 0.6 || ride > 0 || fall > 0
+    matsya.group.visible = run > 0.8 || ride > 0 || fall > 0
     if (ride > 0) {
       state.riding = 1
       swimPath(ride, a)
       swimPath(ride + 0.02, b)
-      const onto = smooth(0, 0.2, ride)
       const back = new THREE.Vector3(0, KOI * 0.13 + EYE * 0.9, 0)
       const ahead = b.clone().sub(a).normalize()
-      pos.lerp(a.clone().add(back).addScaledVector(ahead, -KOI * 0.1), onto)
-      look.lerp(b.clone().add(back).addScaledVector(ahead, 10), onto)
+      // He landed on Matsya's back at the end of the run: stay there.
+      pos.copy(a).add(back)
+      look.copy(b).add(back).addScaledVector(ahead, 10)
       state.leap = 0.3
     }
     state.dark = 0
@@ -539,38 +565,74 @@ export function createSky() {
     // ---- third person: Ashwin where the eye was, and the camera on him
     const inScene = run > 0 || ride > 0 || fall > 0
     hero.group.visible = inScene
-    if (inScene) {
+    const running = run > 0 && ride <= 0 && fall <= 0
+    state.white = 0
+    let roll = 0
+    let fov = 52
+    let ropeOn = false
+    if (running) {
+      // The course (parkour.ts): where he is, how he holds himself, the shot.
+      hero.handWorld(handPos)
+      hero.tipWorld(tipPos)
+      const m = park.at(run * park.total, dt, time, handPos, tipPos)
+      // The first pieces may still be flying in: ride along with them.
+      if (m.idx <= 2) {
+        const dA = topOf(path[0], a).sub(restA)
+        const dB = topOf(path[1], b).sub(restB)
+        const d = m.idx === 0 ? dA : m.idx === 2 ? dB : dA.lerp(dB, m.k)
+        m.feet.add(d)
+        m.shot.cam.add(d)
+        m.shot.look.add(d)
+      }
+      hero.setSword(m.sword, m.beat === 'slide' ? 1.2 * (1 - m.k) : 0)
+      hero.group.rotation.order = 'YXZ'
+      hero.group.rotation.set(m.pitch, Math.atan2(m.facing.x, m.facing.z), m.roll)
+      // Flips and dives turn about his middle; the swing about his feet.
+      hero.group.position.copy(m.feet)
+      if (m.mode === 'tuck' || m.mode === 'dive' || m.beat === 'drop' || m.beat === 'soar') {
+        const c = new THREE.Vector3(0, 1, 0)
+        hero.group.position.add(c).sub(c.clone().applyEuler(hero.group.rotation))
+      }
+      heroVel.copy(m.feet).sub(lastFeet).divideScalar(Math.max(dt, 1 / 120))
+      if (heroVel.length() > 80) heroVel.set(0, 0, 0)
+      lastFeet.copy(m.feet)
+      hero.update(dt, m.mode, m.phase, heroVel, time, m.mode === 'run' ? 16 : 11)
+      pos.copy(m.shot.cam)
+      look.copy(m.shot.look)
+      state.leap = m.leap
+      state.shake = Math.max(state.shake, m.shake)
+      state.white = m.white
+      // The cloud he tears through stays torn behind him.
+      const into = ['dive', 'drop'].includes(m.beat)
+      park.tear(park.diveIn, into ? m.feet : park.diveIn, into ? 1 : 0, time)
+      roll = m.shot.roll
+      fov = m.shot.fov
+      ropeOn = m.rope
+    } else if (inScene) {
+      hero.setSword('back')
       const facing = look.clone().sub(pos).setY(0)
       if (facing.lengthSq() < 1e-6) facing.copy(fwd)
       facing.normalize()
-      const side = new THREE.Vector3(-facing.z, 0, facing.x)
-      let mode: HeroMode = 'run'
+      let mode: HeroMode = 'ride'
       heroFeet.copy(pos)
       heroFeet.y -= EYE
       if (fall > 0 && descend > 0) mode = 'fall'
       else if (fall > 0) mode = 'jump'
-      else if (ride > 0) {
+      else {
         mode = ride < 0.08 ? 'land' : 'ride'
         heroFeet.y += EYE * 0.1
-      } else if (f >= 0.42) {
-        const k = (f - 0.42) / 0.58
-        mode = k > 0.88 ? 'land' : 'jump'
       }
-      const step = heroFeet.distanceTo(lastFeet)
-      if (step < 3) runPhase += step * 3.4
       heroVel.copy(heroFeet).sub(lastFeet).divideScalar(Math.max(dt, 1 / 120))
       if (heroVel.length() > 60) heroVel.set(0, 0, 0)
       lastFeet.copy(heroFeet)
       hero.group.position.copy(heroFeet)
       hero.group.rotation.order = 'YXZ'
       hero.group.rotation.set(mode === 'fall' ? 1.1 + Math.sin(time * 0.6) * 0.15 : 0, Math.atan2(facing.x, facing.z), mode === 'fall' ? Math.sin(time * 0.4) * 0.3 : 0)
-      hero.update(dt, mode, runPhase, heroVel, time, mode === 'run' ? 16 : 9)
-
-      // The camera, cutting from shot to shot like an anime sequence.
+      hero.update(dt, mode, 0, heroVel, time, 9)
       const H = heroFeet.clone().add(new THREE.Vector3(0, 1.0, 0))
       const cam = new THREE.Vector3()
       const at = H.clone()
-      let roll = 0
+      const side = new THREE.Vector3(-facing.z, 0, facing.x)
       if (fall > 0 && descend > 0) {
         // Falling: round him, close; now and then a cut wide, to see how far.
         const shot = Math.floor(descend * 7) % 3
@@ -587,35 +649,25 @@ export function createSky() {
         const ang = ride * Math.PI * 1.3 + 0.6
         cam.copy(H).add(new THREE.Vector3(Math.cos(ang) * 8, 2.5 + Math.sin(ride * Math.PI) * 2, Math.sin(ang) * 8))
         at.add(new THREE.Vector3(0, -0.6, 0))
-      } else {
-        const shot = i % 5
-        if (shot === 0) cam.copy(H).addScaledVector(facing, -4.6).addScaledVector(side, 1.1).add(new THREE.Vector3(0, 0.9, 0))
-        else if (shot === 1) cam.copy(H).addScaledVector(side, 5.2).addScaledVector(facing, -0.5).add(new THREE.Vector3(0, 0.4, 0))
-        else if (shot === 2) cam.copy(H).addScaledVector(facing, 5.5).addScaledVector(side, 1.4).add(new THREE.Vector3(0, 0.6, 0))
-        else if (shot === 3) cam.copy(H).addScaledVector(facing, -2.2).addScaledVector(side, 1).add(new THREE.Vector3(0, 4, 0))
-        else {
-          cam.copy(H).addScaledVector(side, -4.2).addScaledVector(facing, 1.2).add(new THREE.Vector3(0, -0.8, 0))
-          roll = 0.22
-        }
-        if (shot !== 2) at.addScaledVector(facing, 1.5)
-        // Mid-leap the camera whips round him, pulling in.
-        if (f >= 0.42) {
-          const k = (f - 0.42) / 0.58
-          const whip = Math.sin(k * Math.PI) * 1.4
-          const off = cam.clone().sub(H)
-          off.applyAxisAngle(new THREE.Vector3(0, 1, 0), whip).multiplyScalar(1 - 0.3 * Math.sin(k * Math.PI))
-          cam.copy(H).add(off)
-        }
       }
+      pos.copy(cam)
+      look.copy(at)
+    }
+    park.tick(dt, time, handPos, ropeOn)
+    if (inScene) {
+      sunLight.target.position.copy(hero.group.position)
+      sunLight.position.copy(hero.group.position).addScaledVector(sunDir, 70)
+      sunLight.target.updateMatrixWorld()
+    }
+    if (inScene) {
       // Nothing between the lens and him: pull in in front of any slab or cloud.
-      const toCam = cam.clone().sub(H)
+      const H = hero.group.position.clone().add(new THREE.Vector3(0, 1, 0))
+      const toCam = pos.clone().sub(H)
       const reach = toCam.length()
       ray.set(H, toCam.normalize())
       ray.far = reach
       const hit = ray.intersectObjects(blockers, true)[0]
-      if (hit) cam.copy(H).addScaledVector(toCam, Math.max(hit.distance - 0.5, 1.4))
-      pos.copy(cam)
-      look.copy(at)
+      if (hit) pos.copy(H).addScaledVector(toCam, Math.max(hit.distance - 0.5, 1.4))
       camera.up.set(Math.sin(roll), Math.cos(roll), 0)
     }
     // A cut is not speed: only real motion counts.
@@ -626,7 +678,7 @@ export function createSky() {
     if (state.shake > 0) camera.position.y += (Math.random() - 0.5) * 0.14 * state.shake
     if (!inScene) camera.up.set(0, 1, 0)
     camera.lookAt(look)
-    camera.fov = 52 + 10 * state.leap * (run > 0 || fall > 0 || ride > 0 ? 1 : 0)
+    camera.fov = (running ? fov : 52) + 8 * state.leap * (inScene ? 1 : 0)
     camera.updateProjectionMatrix()
     skyUniforms.uDark.value = state.dark
     shared.uHazeK.value = 0.006 + 0.02 * state.dark

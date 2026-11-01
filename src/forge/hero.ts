@@ -8,7 +8,7 @@ import * as THREE from 'three'
 // falling. Drawn either through the sketch pass (lit) or as a cel (toon,
 // with an inked outline), so he belongs to whichever world he is in.
 
-export type HeroMode = 'idle' | 'run' | 'jump' | 'ride' | 'fall' | 'land'
+export type HeroMode = 'idle' | 'run' | 'jump' | 'ride' | 'fall' | 'land' | 'hang' | 'swing' | 'dive' | 'tuck'
 
 const SKIN = '#C08A68'
 const HAIR = '#0B0A0D'
@@ -107,7 +107,8 @@ export function createHero({ toon = false }: { toon?: boolean } = {}) {
     const el = joint(sh, [0, -0.3, 0])
     part(new THREE.CapsuleGeometry(0.048, 0.2, 4, 10), coatM, el, [0, -0.13, 0])
     part(new THREE.SphereGeometry(0.05, 10, 8).scale(0.8, 1.1, 0.6), skinM, el, [0, -0.3, 0.01])
-    return { sh, el }
+    const hand = joint(el, [0, -0.31, 0.01])
+    return { sh, el, hand }
   }
   const L = arm(1)
   const R = arm(-1)
@@ -154,6 +155,36 @@ export function createHero({ toon = false }: { toon?: boolean } = {}) {
   // The wrap round the neck.
   part(new THREE.TorusGeometry(0.085, 0.035, 8, 20).rotateX(Math.PI / 2), scarfMat, chest, [0, 0.2, 0])
   let scarfReady = false
+
+  // The sword: a katana in a black scabbard across his back, drawn when
+  // he needs it. Built along +y from the grip: handle, guard, blade.
+  const sword = new THREE.Group()
+  const steel = toon ? new THREE.MeshToonMaterial({ color: '#D6DBE2', gradientMap: ramp, emissive: '#FF6A1A', emissiveIntensity: 0 }) : new THREE.MeshStandardMaterial({ color: '#D6DBE2', metalness: 0.9, roughness: 0.22, emissive: '#FF6A1A', emissiveIntensity: 0 })
+  const bladeShape = new THREE.Shape()
+  bladeShape.moveTo(-0.014, 0)
+  bladeShape.quadraticCurveTo(-0.02, 0.4, -0.006, 0.78)
+  bladeShape.lineTo(0.016, 0.72)
+  bladeShape.quadraticCurveTo(0.018, 0.36, 0.014, 0)
+  bladeShape.closePath()
+  const bladeGeo = new THREE.ExtrudeGeometry(bladeShape, { depth: 0.006, bevelEnabled: true, bevelThickness: 0.003, bevelSize: 0.003, bevelSegments: 1, curveSegments: 16 })
+  bladeGeo.translate(0, 0.13, -0.003)
+  part(bladeGeo, steel, sword)
+  part(new THREE.CylinderGeometry(0.052, 0.052, 0.012, 20), mat('#B08A3E', { metalness: 0.8, roughness: 0.3 }), sword, [0, 0.125, 0])
+  part(new THREE.CylinderGeometry(0.017, 0.019, 0.24, 10), mat('#2A0E0C'), sword, [0, 0.0, 0])
+  const swordTip = new THREE.Object3D()
+  swordTip.position.set(0, 0.9, 0)
+  sword.add(swordTip)
+  const backMount = joint(chest, [-0.15, 0.2, -0.17])
+  backMount.rotation.set(0, 0, -2.62)
+  part(new THREE.CylinderGeometry(0.026, 0.02, 0.8, 10), mat('#121014'), backMount, [0, 0.53, 0])
+  const handMount = joint(R.hand, [0, -0.02, 0])
+  handMount.rotation.set(Math.PI, 0, 0)
+  backMount.add(sword)
+  function setSword(where: 'back' | 'hand', heat = 0) {
+    const to = where === 'hand' ? handMount : backMount
+    if (sword.parent !== to) to.add(sword)
+    steel.emissiveIntensity = heat
+  }
 
   const cur = zero()
   const tgt = zero()
@@ -232,6 +263,49 @@ export function createHero({ toon = false }: { toon?: boolean } = {}) {
       tgt.elR = 0.4
       tgt.headPitch = -0.15
       tgt.twist = Math.sin(t * 2) * 0.05
+    } else if (mode === 'hang') {
+      // Hanging off the blade driven in above him: sword arm up, the other
+      // out for balance, a boot braced against the rock.
+      tgt.shR = -2.75
+      tgt.elR = 0.15
+      tgt.shL = -0.9
+      tgt.shOutL = 0.7
+      tgt.elL = 0.6
+      tgt.thL = -1.0
+      tgt.knL = 1.5
+      tgt.thR = -0.35
+      tgt.knR = 0.7
+      tgt.lean = -0.1
+      tgt.headPitch = 0.45
+      tgt.twist = -0.15
+    } else if (mode === 'swing') {
+      // Both hands on the rope above, legs driving the swing.
+      tgt.shL = tgt.shR = -2.95
+      tgt.elL = tgt.elR = 0.12
+      tgt.thL = -0.55 + Math.sin(t * 3) * 0.25
+      tgt.thR = -0.35 + Math.sin(t * 3 + 0.6) * 0.25
+      tgt.knL = 0.6
+      tgt.knR = 0.9
+      tgt.headPitch = 0.1
+    } else if (mode === 'dive') {
+      // Head first, a fist driven ahead, the other arm swept back.
+      tgt.shR = -3.0
+      tgt.elR = 0
+      tgt.shL = 0.5
+      tgt.shOutL = 0.25
+      tgt.elL = 0.2
+      tgt.thL = 0.1
+      tgt.thR = -0.15
+      tgt.knL = 0.2
+      tgt.knR = 0.5
+      tgt.headPitch = -0.5
+    } else if (mode === 'tuck') {
+      tgt.thL = tgt.thR = -2.1
+      tgt.knL = tgt.knR = 2.4
+      tgt.shL = tgt.shR = -1.1
+      tgt.elL = tgt.elR = 1.7
+      tgt.lean = 0.55
+      tgt.headPitch = -0.3
     } else if (mode === 'fall') {
       // Falling: spread, slowly turning, everything lifting.
       tgt.lean = -0.25 + Math.sin(t * 0.7) * 0.1
@@ -337,5 +411,7 @@ export function createHero({ toon = false }: { toon?: boolean } = {}) {
   }
   root.add(scarf)
 
-  return { group: root, update, head, resetScarf: () => (scarfReady = false) }
+  const handWorld = (out: THREE.Vector3) => R.hand.getWorldPosition(out)
+  const tipWorld = (out: THREE.Vector3) => swordTip.getWorldPosition(out)
+  return { group: root, update, head, resetScarf: () => (scarfReady = false), setSword, handWorld, tipWorld }
 }

@@ -3,6 +3,7 @@ import type { Repo } from './github'
 import { hash, smooth, easeInOut, clamp01 } from './ink'
 import { P } from './palette'
 import { prettyName } from './names'
+import { projectArt } from './art'
 
 // The sword saint. A lone figure in a long black coat stands in a pool of
 // red light on the black fluid; the projects hang round him like blades
@@ -108,7 +109,28 @@ function cardTexture(repo: Repo, i: number) {
   const t = new THREE.CanvasTexture(c)
   t.colorSpace = THREE.SRGBColorSpace
   t.anisotropy = 8
-  return t
+  return { t, c, g, bg }
+}
+
+// When the project's print is ready, it takes the card's right half.
+function withArt(card: ReturnType<typeof cardTexture>, repo: Repo, ink: [string, string]) {
+  projectArt(repo, ink, 160, 200).then((art) => {
+    const { g, c, bg, t } = card
+    g.save()
+    g.beginPath()
+    g.rect(560, 6, c.width - 566, 528)
+    g.clip()
+    g.fillStyle = '#0B0A0D'
+    g.fillRect(560, 6, c.width - 566, 528)
+    g.drawImage(art, 560, 6, c.width - 566, 528)
+    const fade = g.createLinearGradient(560, 0, 700, 0)
+    fade.addColorStop(0, bg)
+    fade.addColorStop(1, 'rgba(0,0,0,0)')
+    g.fillStyle = fade
+    g.fillRect(560, 6, 140, 528)
+    g.restore()
+    t.needsUpdate = true
+  })
 }
 
 function cardBack() {
@@ -355,13 +377,15 @@ export function createOrbit(canvas: HTMLCanvasElement, onOpen: (repo: Repo) => v
   const BEND = 4.2
   const ARC = 0.62
 
-  function setRepos(repos: Repo[]) {
+  function setRepos(repos: Repo[], ink: [string, string] = ['#D4241C', '#F2B24A']) {
     cards.forEach((c) => scene.remove(c.group))
     cards = repos.map((repo, i) => {
       // A curved blade: a slice of a cylinder, bulging toward its own front (+z).
       const geo = new THREE.CylinderGeometry(BEND, BEND, ARC * BEND * 0.625, 24, 1, true, -ARC / 2, ARC)
       geo.translate(0, 0, -BEND)
-      const front = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map: cardTexture(repo, i), side: THREE.FrontSide }))
+      const tex = cardTexture(repo, i)
+      withArt(tex, repo, ink)
+      const front = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map: tex.t, side: THREE.FrontSide }))
       const behind = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map: back, side: THREE.BackSide }))
       const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geo, 40), new THREE.LineBasicMaterial({ color: '#0A0909' }))
       const group = new THREE.Group()

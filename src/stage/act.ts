@@ -884,7 +884,7 @@ export function createAct(renderer: THREE.WebGLRenderer, { small }: { small: boo
   const world = new THREE.Group()
   scene.add(world)
 
-  const painting = new THREE.Mesh(new THREE.PlaneGeometry(13.5, 8.8), worldMaterial(paintingFragment, texture('/art/yamuna.jpg')))
+  const painting = new THREE.Mesh(new THREE.PlaneGeometry(13.5, 8.8), worldMaterial(paintingFragment, texture('/art/yamuna.webp')))
   painting.position.set(0.6, 4.3, -13)
   painting.renderOrder = -2
   world.add(painting)
@@ -894,13 +894,13 @@ export function createAct(renderer: THREE.WebGLRenderer, { small }: { small: boo
   yantra.renderOrder = -1
   world.add(yantra)
 
-  const gandharva = new THREE.Mesh(new THREE.PlaneGeometry(1.25, 3.5), worldMaterial(figureFragment, texture('/art/gandharva.png')))
+  const gandharva = new THREE.Mesh(new THREE.PlaneGeometry(1.25, 3.5), worldMaterial(figureFragment, texture('/art/gandharva.webp')))
   world.add(gandharva)
 
-  const attendant = new THREE.Mesh(new THREE.PlaneGeometry(1.75, 2.3), worldMaterial(figureFragment, texture('/art/attendant.png')))
+  const attendant = new THREE.Mesh(new THREE.PlaneGeometry(1.75, 2.3), worldMaterial(figureFragment, texture('/art/attendant.webp')))
   world.add(attendant)
 
-  const folio = new THREE.Mesh(new THREE.PlaneGeometry(2.4, 0.99), worldMaterial(folioFragment, texture('/art/kalpasutra.jpg')))
+  const folio = new THREE.Mesh(new THREE.PlaneGeometry(2.4, 0.99), worldMaterial(folioFragment, texture('/art/kalpasutra.webp')))
   folio.rotation.set(-0.08, 0.42, -0.04)
   world.add(folio)
 

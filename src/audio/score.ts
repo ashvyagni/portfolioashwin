@@ -57,6 +57,8 @@ export class Score {
   // A master tone control: wide open for the story, closed down to a warm,
   // broad sound on the landing, where people stay a while (no fatiguing top).
   private tone!: BiquadFilterNode
+  // The song past the rift: its own path, so the score can fall away under it.
+  private song: { el: HTMLMediaElement; gain: GainNode; analyser: AnalyserNode } | null = null
   private tremolo!: OscillatorNode
   private muted = true
   private scene: Scene = 'void'
@@ -77,7 +79,8 @@ export class Score {
     if (!muted && !this.ctx) this.start()
     if (!this.ctx) return
     if (this.ctx.state === 'suspended') void this.ctx.resume()
-    this.ramp(this.master.gain, muted ? 0 : 0.6, muted ? 0.5 : 2.5)
+    if (this.song) this.ramp(this.song.gain.gain, muted ? 0 : 0.9, muted ? 0.4 : 1.5)
+    else this.ramp(this.master.gain, muted ? 0 : 0.6, muted ? 0.5 : 2.5)
   }
 
   get isMuted() {
@@ -203,7 +206,62 @@ export class Score {
       case 'arrive':
         this.enter('serene', 1.5)
         break
+      // Phase two builds on the entrance theme, level by level, to the rift.
+      case 'forge-spiral':
+        this.enter('mc1', 2)
+        break
+      case 'forge-tree':
+        this.enter('mc2', 2)
+        break
+      case 'forge-sky':
+        this.enter('mc3', 1.5)
+        break
+      case 'forge-ride':
+        this.enter('mc4', 1)
+        break
+      case 'rift-open':
+        this.riser(2.6, 0.22)
+        break
+      case 'rift-cross':
+        this.boom(0.9, 2.5)
+        this.whoosh(1.4, 0.3, true)
+        break
     }
+  }
+
+  // Past the rift: the chosen song takes over (the score falls silent under
+  // it). Returns its analyser, for the gradient that moves with it.
+  playSong(el: HTMLMediaElement, from: number) {
+    if (!this.ctx) return null
+    const ctx = this.ctx
+    if (!this.song || this.song.el !== el) {
+      const source = ctx.createMediaElementSource(el)
+      const gain = ctx.createGain()
+      gain.gain.value = 0
+      const analyser = ctx.createAnalyser()
+      analyser.fftSize = 512
+      analyser.smoothingTimeConstant = 0.75
+      source.connect(gain)
+      gain.connect(analyser)
+      if (!new URLSearchParams(location.search).has('silent')) gain.connect(ctx.destination)
+      this.song = { el, gain, analyser }
+    }
+    el.currentTime = from
+    void el.play()
+    this.ramp(this.song.gain.gain, this.muted ? 0 : 0.9, 0.08)
+    this.ramp(this.master.gain, 0, 1.2)
+    // Once it is quiet under the song, stop the score's own players too.
+    window.setTimeout(() => this.song && !this.song.el.paused && this.enter('silence', 0.5), 1300)
+    return this.song.analyser
+  }
+
+  // Back out of the forge: the song stops, the score returns.
+  stopSong() {
+    if (!this.song || !this.ctx) return
+    this.ramp(this.song.gain.gain, 0, 0.6)
+    const el = this.song.el
+    window.setTimeout(() => el.pause(), 700)
+    this.ramp(this.master.gain, this.muted ? 0 : 0.6, 2)
   }
 
   // Output loudness right now, in dBFS (for checking the mix).
@@ -1113,4 +1171,8 @@ const SCENE_OF: Record<string, Scene> = {
   follow: 'fall',
   impact: 'serene',
   arrive: 'serene',
+  'forge-spiral': 'mc1',
+  'forge-tree': 'mc2',
+  'forge-sky': 'mc3',
+  'forge-ride': 'mc4',
 }

@@ -1,6 +1,8 @@
 import * as THREE from 'three'
 import { clamp01, easeInOut, easeOut, mulberry32, smooth } from './ink'
 import { createMatsya } from './matsya'
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
+import { sketchState } from './world'
 import { P } from './palette'
 
 // What the cross cuts open. The page is a solid thing — a slab of paper with
@@ -101,48 +103,6 @@ const skyFragment = /* glsl */ `
   }
 `
 
-// A cumulus, painted the anime way: a lavender shadow side, a cream lit top,
-// a hard step between, hatching in the shade like a background painter's.
-function cloudTexture(rng: () => number) {
-  const c = document.createElement('canvas')
-  c.width = 1024
-  c.height = 512
-  const g = c.getContext('2d')!
-  const puffs = Array.from({ length: 11 }, (_, i) => {
-    const u = i / 10
-    return { x: 120 + u * 780 + (rng() - 0.5) * 50, y: 330 - Math.sin(u * Math.PI) * (140 + rng() * 60) + (rng() - 0.5) * 30, r: 70 + rng() * 70 + Math.sin(u * Math.PI) * 50 }
-  })
-  const body = (dx: number, dy: number, grow: number, color: string) => {
-    g.fillStyle = color
-    puffs.forEach((p) => {
-      g.beginPath()
-      g.arc(p.x + dx, p.y + dy, Math.max(p.r + grow, 1), 0, Math.PI * 2)
-      g.fill()
-    })
-    g.beginPath()
-    g.roundRect(120 + dx - grow, 300 + dy - grow, 780 + grow * 2, 110 + grow * 2, 50)
-    g.fill()
-  }
-  body(0, 0, 4, 'rgba(60, 70, 120, 0.55)')
-  body(0, 0, 0, '#B9C2E4')
-  g.save()
-  g.globalCompositeOperation = 'source-atop'
-  body(-18, -34, -6, '#FFF6E6')
-  body(-30, -52, -26, '#FFFFFF')
-  g.strokeStyle = 'rgba(70, 80, 140, 0.25)'
-  g.lineWidth = 3
-  for (let x = 140; x < 900; x += 14) {
-    g.beginPath()
-    g.moveTo(x, 405)
-    g.lineTo(x + 26, 360)
-    g.stroke()
-  }
-  g.restore()
-  const t = new THREE.CanvasTexture(c)
-  t.colorSpace = THREE.SRGBColorSpace
-  return t
-}
-
 // Cut a polygon in two along a line (through p, along d).
 function split(poly: THREE.Vector2[], p: THREE.Vector2, d: THREE.Vector2) {
   const n = new THREE.Vector2(-d.y, d.x)
@@ -166,10 +126,9 @@ function split(poly: THREE.Vector2[], p: THREE.Vector2, d: THREE.Vector2) {
 const area = (poly: THREE.Vector2[]) => Math.abs(poly.reduce((s, v, i) => s + v.x * poly[(i + 1) % poly.length].y - poly[(i + 1) % poly.length].x * v.y, 0) / 2)
 const centre = (poly: THREE.Vector2[]) => poly.reduce((s, v) => s.add(v), new THREE.Vector2()).divideScalar(poly.length)
 
-export function createSky(canvas: HTMLCanvasElement) {
-  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false })
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.75))
+export function createSky() {
   const scene = new THREE.Scene()
+  const sketch = sketchState()
   const camera = new THREE.PerspectiveCamera(50, 1, 0.05, 900)
   const rng = mulberry32(42)
   const haze = new THREE.Color(P.skyLow)
@@ -183,17 +142,44 @@ export function createSky(canvas: HTMLCanvasElement) {
   }
   scene.add(new THREE.Mesh(new THREE.SphereGeometry(600, 48, 24), new THREE.ShaderMaterial({ vertexShader: skyVertex, fragmentShader: skyFragment, uniforms: skyUniforms, side: THREE.BackSide, depthWrite: false })))
 
-  // Clouds: great ones among the debris, a sea of them far below.
-  const clouds: THREE.Sprite[] = []
-  const cloudMats = Array.from({ length: 5 }, () => new THREE.SpriteMaterial({ map: cloudTexture(rng), transparent: true, depthWrite: false, fog: false }))
-  for (let i = 0; i < 44; i++) {
-    const sea = i >= 14
-    const s = new THREE.Sprite(cloudMats[i % cloudMats.length])
-    const w = sea ? 40 + rng() * 50 : 18 + rng() * 26
-    s.scale.set(w, w / 2, 1)
-    s.position.set((rng() - 0.5) * (sea ? 420 : 160), sea ? -40 - rng() * 10 : (rng() - 0.6) * 30 - 6, -rng() * 240 + (sea ? 60 : -10))
-    scene.add(s)
-    clouds.push(s)
+  // Clouds: real cumulus, heaped spheres flattened at the base, lit from
+  // above — the drawing pass inks their billows. Great ones among the
+  // debris, and a sea of them far below.
+  scene.add(new THREE.HemisphereLight('#FFF4E2', '#8C93B8', 1.3))
+  const sunLight = new THREE.DirectionalLight('#FFE9C8', 2.4)
+  sunLight.position.set(30, 40, -20)
+  scene.add(sunLight)
+  const cloudGeo = (seed: number) => {
+    const r2 = mulberry32(seed)
+    const parts: THREE.BufferGeometry[] = []
+    const n = 9 + Math.floor(r2() * 6)
+    for (let i = 0; i < n; i++) {
+      const u = i / (n - 1)
+      const rr = 1.2 + Math.sin(u * Math.PI) * 1.6 + r2() * 0.8
+      const g = new THREE.SphereGeometry(rr, 28, 18)
+      g.translate((u - 0.5) * 9 + (r2() - 0.5), Math.sin(u * Math.PI) * 1.4 + r2() * 0.8, (r2() - 0.5) * 2.4)
+      parts.push(g)
+    }
+    const merged = mergeGeometries(parts)!
+    const pp = merged.attributes.position as THREE.BufferAttribute
+    for (let i = 0; i < pp.count; i++) if (pp.getY(i) < -0.3) pp.setY(i, -0.3 + (pp.getY(i) + 0.3) * 0.15)
+    merged.computeVertexNormals()
+    return merged
+  }
+  const cloudMat = new THREE.MeshStandardMaterial({ color: '#FFFFFF', roughness: 1, flatShading: false })
+  const clouds: THREE.Mesh[] = []
+  const glideClouds: THREE.Mesh[] = []
+  const routeCentre = new THREE.Vector3()
+  const shapes = Array.from({ length: 6 }, (_, i) => cloudGeo(100 + i))
+  for (let i = 0; i < 46; i++) {
+    const sea = i >= 16
+    const c = new THREE.Mesh(shapes[i % shapes.length], cloudMat)
+    const s2 = sea ? 4 + rng() * 4 : 1.4 + rng() * 2.2
+    c.scale.set(s2, s2 * (0.8 + rng() * 0.3), s2)
+    c.rotation.y = rng() * 6
+    c.position.set((rng() - 0.5) * (sea ? 420 : 170), sea ? -44 - rng() * 10 : (rng() - 0.6) * 30 - 6, -rng() * 240 + (sea ? 60 : -10))
+    scene.add(c)
+    clouds.push(c)
   }
 
   // Paper scraps on the wind.
@@ -357,6 +343,26 @@ export function createSky(canvas: HTMLCanvasElement) {
     }
     // The route, in the order you cross it.
     path = [0, 1, 4, 2, 5, 3, 6].map((i) => pieces[i]).filter(Boolean)
+    routeCentre.set(0, 0, 0)
+    path.forEach((p) => routeCentre.add(p.rest.pos))
+    routeCentre.divideScalar(path.length)
+    // A corridor of clouds along the glide after the leap, passing either
+    // side of you (never in the way), so the speed has something to show on.
+    glideClouds.forEach((c) => scene.remove(c))
+    glideClouds.length = 0
+    const g0 = swimPath(1, new THREE.Vector3())
+    const g1 = swimPath(1.02, new THREE.Vector3())
+    const ahead = g1.clone().sub(g0).setY(0).normalize()
+    const side = new THREE.Vector3(-ahead.z, 0, ahead.x)
+    for (let i = 0; i < 18; i++) {
+      const c = new THREE.Mesh(shapes[i % shapes.length], cloudMat)
+      const sgn = i % 2 ? 1 : -1
+      c.position.copy(g0).addScaledVector(ahead, 6 + i * 2.4).addScaledVector(side, sgn * (10 + rng() * 8)).add(new THREE.Vector3(0, 4 + rng() * 14, 0))
+      c.scale.setScalar(0.45 + rng() * 0.35)
+      c.rotation.y = rng() * 6
+      scene.add(c)
+      glideClouds.push(c)
+    }
     // The assembled page exactly fills the view from here.
     pageCam.set(0, 0, H / 2 / Math.tan((camera.fov * Math.PI) / 360))
   }
@@ -371,12 +377,12 @@ export function createSky(canvas: HTMLCanvasElement) {
   const b = new THREE.Vector3()
   const fwd = new THREE.Vector3()
   const axis = new THREE.Vector3()
-  const state = { leap: 0, dark: 0, shake: 0, riding: 0, landed: 0 }
+  const state = { leap: 0, dark: 0, shake: 0, riding: 0, landed: 0, speed: 0 }
+  const lastPos = new THREE.Vector3()
   let lastTime = 0
 
   function setSize(w: number, h: number) {
     aspect = w / h
-    renderer.setSize(w, h, false)
     camera.aspect = aspect
     camera.updateProjectionMatrix()
   }
@@ -389,7 +395,7 @@ export function createSky(canvas: HTMLCanvasElement) {
 
   // cut: seconds since the page was cut; run: 0 … 1 across the debris;
   // ride: 0 … 1 on Matsya; fall: 0 … 1 down into the dark.
-  function render(cut: number, run: number, ride: number, fall: number, time: number) {
+  function update(cut: number, run: number, ride: number, fall: number, time: number, glide = 0) {
     const dt = Math.min(Math.max(time - lastTime, 0), 0.05)
     lastTime = time
     if (!pieces.length) return
@@ -474,16 +480,25 @@ export function createSky(canvas: HTMLCanvasElement) {
       look.lerp(b.clone().add(back).addScaledVector(ahead, 10), onto)
       state.leap = 0.3
     }
-    state.dark = smooth(0.55, 0.95, fall)
+    state.dark = 0
     if (fall > 0) {
+      // Off Matsya's back and up into the open sky, looking ahead: there,
+      // the rift will open.
       swimPath(1, a)
-      const off = smooth(0, 0.2, fall)
-      const down = Math.pow(clamp01((fall - 0.08) / 0.92), 1.7)
-      pos.copy(a).add(new THREE.Vector3(0, KOI * 0.13 + EYE + Math.sin(off * Math.PI) * 3 - down * 130, -off * 8))
-      const tilt = smooth(0.1, 0.45, fall)
-      look.copy(pos).add(new THREE.Vector3(0, -6 * tilt - 0.2, -6 * (1 - tilt) - 0.01))
-      state.leap = 0.7
+      swimPath(1.02, b)
+      const ahead = b.clone().sub(a).setY(0).normalize()
+      const off = easeOut(fall)
+      // Then (the cutscene) up and away, turning to look back over the whole
+      // of the debris world as it loses its colour and comes apart.
+      const g = Math.min(glide / 2.2, 1)
+      const turn = easeInOut(g)
+      pos.copy(a).add(new THREE.Vector3(0, KOI * 0.13 + EYE + Math.sin(Math.min(off, 0.7) / 0.7 * Math.PI * 0.5) * 4 + turn * 22, 0)).addScaledVector(ahead, off * 14 - turn * 46)
+      const forward = pos.clone().addScaledVector(ahead, 20).add(new THREE.Vector3(0, 1.5 * off, 0))
+      look.lerpVectors(forward, routeCentre, turn)
+      state.leap = 0.6 * (1 - off) + 0.2
     }
+    state.speed = lastPos.distanceTo(pos) / Math.max(dt, 1 / 120)
+    lastPos.copy(pos)
     camera.position.copy(pos)
     if (state.shake > 0) camera.position.y += (Math.random() - 0.5) * 0.14 * state.shake
     camera.up.set(0, 1, 0)
@@ -493,17 +508,14 @@ export function createSky(canvas: HTMLCanvasElement) {
     skyUniforms.uDark.value = state.dark
     shared.uHazeK.value = 0.006 + 0.02 * state.dark
     haze.set(P.skyLow).lerp(new THREE.Color('#050506'), state.dark)
-    clouds.forEach((c) => (c.material.opacity = 1 - state.dark))
-    renderer.render(scene, camera)
+    // Into the dark, the drawing turns to the forge's: gold ink on black.
+    sketch.colour = 1
+    sketch.enlight = 0.45
+    sketch.draw = 1
+    sketch.dark = 0
+    sketch.glitch = 0
+    sketch.mono = 0
   }
 
-  return {
-    setSize,
-    build,
-    render,
-    state,
-    dispose() {
-      renderer.dispose()
-    },
-  }
+  return { scene, camera, sketch, setSize, build, update, state }
 }

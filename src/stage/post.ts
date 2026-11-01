@@ -35,6 +35,9 @@ const finish = {
     uBurst: { value: 0 },
     uEye: { value: 0 },
     uEyeAt: { value: new THREE.Vector3(0.5, 0.5, 0.2) },
+    uDark: { value: 0 },
+    uGlitch: { value: 0 },
+    uMono: { value: 0 },
   },
   vertexShader: /* glsl */ `
     varying vec2 vUv;
@@ -68,6 +71,10 @@ const finish = {
     uniform float uBurst;    // an impact frame: the drawing struck into red and black
     uniform float uEye;      // the eye, in the water (0 … 1: drawn, open, gone)
     uniform vec3 uEyeAt;     // where (uv) and how big (z, in heights)
+    uniform float uDark;     // the forge's reality: the same drawing in gold and bone ink on black
+    uniform float uGlitch;   // reality slipping: bands shifted and flipped between the two
+    uniform float uMono;     // the colour gone out of the world (0 … 1)
+    float gDark = 0.0;
     varying vec2 vUv;
 
     float hash(vec2 p) {
@@ -232,6 +239,10 @@ const finish = {
       vec3 inkCol = mix(vec3(0.13, 0.08, 0.06), vec3(0.05, 0.05, 0.08), uDespair);
       inkCol = mix(inkCol, vec3(0.3, 0.17, 0.08), uEnlight * 0.5);
       vec3 graphite = vec3(0.45, 0.43, 0.42);
+      // The forge's reality: black stock, gold and bone ink.
+      paper = mix(paper, vec3(0.035, 0.03, 0.04) * (0.9 + 0.2 * fibre), gDark);
+      inkCol = mix(inkCol, vec3(0.96, 0.82, 0.55), gDark);
+      graphite = mix(graphite, vec3(0.42, 0.34, 0.26), gDark);
 
       // The paint: the render, graded to the story's mood, given a soft cel
       // step (an anime gradient, shaded in bands), pigment granulating in the
@@ -248,6 +259,8 @@ const finish = {
       // Watercolour is a stain in the paper, not a coat over it: even the
       // darkest water lets the page show through.
       vec3 painted = paper * (0.3 + 0.7 * clamp(pig * 1.08, 0.0, 1.0)) * gran;
+      painted = mix(painted, pig * vec3(0.5, 0.42, 0.34) * gran + vec3(0.02), gDark);
+      painted = mix(painted, vec3(dot(painted, vec3(0.3, 0.59, 0.11))), uMono);
 
       // Where the paint has reached.
       float spread = noise(uv * vec2(5.0 * aspect, 5.0) + 3.0) * 0.5 + noise(uv * 23.0) * 0.12;
@@ -290,9 +303,20 @@ const finish = {
 
     void main() {
       vec2 uv = vUv + uShake;
+      // Reality slipping: some rows shifted sideways and flipped to the other side.
+      float band = 0.0;
+      if (uGlitch > 0.001) {
+        float tick = floor(uTime * 12.0);
+        // Tears of every height: a coarse row and a fine one, both must agree.
+        float coarse = floor(vUv.y * mix(10.0, 26.0, hash(vec2(tick, 1.0))));
+        float fine = floor(vUv.y * 140.0);
+        band = step(1.0 - uGlitch * 0.5, hash(vec2(coarse, tick))) * step(0.35, hash(vec2(fine, tick + 7.0)));
+        uv.x += band * (hash(vec2(coarse + 3.0, tick)) - 0.5) * 0.08 * uGlitch;
+      }
+      gDark = clamp(abs(uDark - band), 0.0, 1.0);
       vec2 c = uv - 0.5;
       float r2 = dot(c, c);
-      vec2 fringe = c * r2 * 0.01;
+      vec2 fringe = c * r2 * 0.01 + vec2(band * 0.012, 0.0);
       fringe *= 1.0 + 6.0 * length(uShake) * 40.0;
       vec3 col = vec3(
         texture2D(tDiffuse, uv - fringe).r,
@@ -351,6 +375,9 @@ export type SketchState = {
   burst: number
   eye: number
   eyeAt: THREE.Vector3
+  dark?: number
+  glitch?: number
+  mono?: number
 }
 
 export function createPost(renderer: THREE.WebGLRenderer, scene: THREE.Scene, camera: THREE.Camera) {
@@ -401,6 +428,9 @@ export function createPost(renderer: THREE.WebGLRenderer, scene: THREE.Scene, ca
       u.uBurst.value = s.burst
       u.uEye.value = s.eye
       u.uEyeAt.value.copy(s.eyeAt)
+      u.uDark.value = s.dark ?? 0
+      u.uGlitch.value = s.glitch ?? 0
+      u.uMono.value = s.mono ?? 0
     },
     setPaper(amount: number) {
       finishPass.uniforms.uPaper.value = amount

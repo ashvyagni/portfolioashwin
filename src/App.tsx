@@ -1,9 +1,12 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react'
 import { createStage, type Stage, type IntroEvents } from './stage/stage'
 import { Score } from './audio/score'
 import { Gate } from './ui/Gate'
 import { Landing } from './ui/Landing'
-import { Forge } from './ui/Forge'
+// The forge is its own bundle: fetched while the landing plays, so the first
+// load carries only phase one.
+const loadForge = () => import('./ui/Forge')
+const Forge = lazy(() => loadForge().then((m) => ({ default: m.Forge })))
 
 type Phase = 'gate' | 'intro' | 'landing' | 'forge'
 
@@ -124,8 +127,12 @@ export default function App() {
   }, [])
   const ascend = useCallback(() => {
     stageRef.current?.setPaused(false)
+    audioRef.current.cue('arrive')
     setPhase('landing')
   }, [])
+  useEffect(() => {
+    if (phase === 'landing') void loadForge()
+  }, [phase])
   useEffect(() => {
     if (phase !== 'landing') return
     const onWheel = (e: WheelEvent) => {
@@ -176,7 +183,11 @@ export default function App() {
         </button>
       )}
       {phase === 'landing' && stageRef.current && <Landing muted={muted} onToggleSound={toggleSound} companion={stageRef.current.companion} onDescend={descend} />}
-      {phase === 'forge' && <Forge onBack={ascend} landing={landingShot} />}
+      {phase === 'forge' && (
+        <Suspense fallback={null}>
+          <Forge onBack={ascend} landing={landingShot} score={audioRef.current} />
+        </Suspense>
+      )}
     </>
   )
 }

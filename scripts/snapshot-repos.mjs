@@ -24,6 +24,21 @@ try {
     topics: r.topics,
     default_branch: r.default_branch,
   }))
+  // Which file is each README (or none), so the page fetches the right one
+  // and never guesses its way through 404s.
+  await Promise.all(
+    repos.map(async (r) => {
+      try {
+        const res = await fetch(`https://api.github.com/repos/${USER}/${r.name}/readme`, {
+          headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'ashforge-build' },
+        })
+        if (res.ok) r.readme = (await res.json()).path
+        else if (res.status === 404) r.readme = null
+      } catch {
+        // unknown: the page will look for itself
+      }
+    }),
+  )
   await writeFile(out, JSON.stringify(repos))
   console.log(`snapshot: ${repos.length} repositories`)
 } catch (err) {

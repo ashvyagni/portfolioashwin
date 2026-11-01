@@ -42,7 +42,7 @@ const PHRASES: [number | null, number][][] = [
   [[2, 1], [3, 1], [4, 2], [6, 1], [5, 0.5], [4, 0.5], [3, 3], [null, 1], [2, 1], [0, 4]],
 ]
 
-type Scene = 'void' | 'mc1' | 'mc2' | 'breath' | 'mc3' | 'mc4' | 'hand' | 'eyes' | 'wide' | 'collapse' | 'silence' | 'dawn' | 'wonder' | 'mind' | 'held' | 'fall' | 'serene'
+type Scene = 'void' | 'mc1' | 'mc2' | 'breath' | 'mc3' | 'mc4' | 'hand' | 'eyes' | 'wide' | 'collapse' | 'silence' | 'dawn' | 'wonder' | 'mind' | 'held' | 'fall' | 'serene' | 'nautilus' | 'grove' | 'dread' | 'run' | 'flight'
 
 export class Score {
   private ctx: AudioContext | null = null
@@ -69,6 +69,9 @@ export class Score {
   private tanpura = { on: false, next: 0, string: 0 }
   private flute = { on: false, next: 0, phrase: 0 }
   private letter = 0
+  // Phase two's own music: one sequencer, whose kind is the place you are.
+  // In the run, `level` is how much is playing (0 hush … 5 everything).
+  private fz = { on: false, kind: 'nautilus' as 'nautilus' | 'grove' | 'run' | 'flight', step: 0, next: 0, bpm: 76, level: 0, lead: 0 }
   private analyser: AnalyserNode | null = null
   private hum: { stop: () => void } | null = null
 
@@ -85,6 +88,13 @@ export class Score {
 
   get isMuted() {
     return this.muted
+  }
+
+  // Inside a cloud: everything heard through it, 0 … 1.
+  muffle(k: number) {
+    if (!this.ctx) return
+    const f = 16000 * Math.pow(420 / 16000, Math.min(Math.max(k, 0), 1))
+    this.tone.frequency.setTargetAtTime(f, this.ctx.currentTime, 0.06)
   }
 
   // Story beats from the stage.
@@ -208,16 +218,42 @@ export class Score {
         break
       // Phase two builds on the entrance theme, level by level, to the rift.
       case 'forge-spiral':
-        this.enter('mc1', 2)
+        this.enter('nautilus', 2.5)
         break
       case 'forge-tree':
-        this.enter('mc2', 2)
+        this.enter('grove', 2.5)
+        break
+      case 'forge-eye': {
+        // 3.3 s from the eye opening to the cut: everything leans into it.
+        this.enter('dread', 0.6)
+        this.later(1.3, () => (this.heart.bpm = 100))
+        this.later(2.3, () => (this.heart.bpm = 150))
+        this.riser(3.1, 0.3)
+        this.reverseCymbal(3.2, 0.13)
+        this.brass([note(0), note(1), note(6), note(12)], this.now(0.6), 2.6, 0.05, true)
+        break
+      }
+      case 'forge-cut':
+        // The rays cut the page: one blow, then a breath of nothing.
+        this.enter('silence', 0.05)
+        this.boom(0.7, 3)
+        this.crash(this.now(0), 0.15, 3.5)
+        this.taiko(this.now(0), 0.95)
+        this.taiko(this.now(0.11), 0.7)
+        this.whoosh(1.2, 0.3, true)
         break
       case 'forge-sky':
-        this.enter('mc3', 1.5)
         break
-      case 'forge-ride':
-        this.enter('mc4', 1)
+      case 'forge-ride': {
+        // Down onto Matsya: the minor turns major, and the sky opens.
+        this.boom(0.7, 2.6)
+        this.crash(this.now(0), 0.14, 3)
+        this.brass([note(0), note(12), note(16), note(19), note(24)], this.now(0), 2.2, 0.07, true)
+        this.enter('flight', 1)
+        break
+      }
+      default:
+        if (name.startsWith('run-')) this.runBeat(name.slice(4))
         break
       case 'rift-open':
         this.riser(2.6, 0.22)
@@ -312,6 +348,18 @@ export class Score {
       this.mc.bpm = bpm
     }
     this.mc.on = false
+    const wasFz = this.fz.on
+    this.fz.on = false
+    const fz = (kind: typeof this.fz.kind, bpm: number) => {
+      if (!wasFz || this.fz.kind !== kind) {
+        this.fz.step = 0
+        this.fz.next = this.ctx!.currentTime + 0.05
+        this.fz.level = kind === 'run' ? 2 : 1
+      }
+      this.fz.on = true
+      this.fz.kind = kind
+      this.fz.bpm = bpm
+    }
     switch (scene) {
       // The entrance, building beat by beat.
       case 'mc1':
@@ -396,6 +444,52 @@ export class Score {
       case 'fall':
         set(0.25, 1.1, 0, 1.3, fade)
         this.ramp(this.tremolo.frequency, 12, 2)
+        break
+      // ---- the forge
+      case 'nautilus':
+        // Down the shell: a music box in Bhairav over a clockwork tick, the
+        // tanpura's drone under it, closed and dim.
+        set(0.36, 0, 0.55, 0.35, fade)
+        this.ramp(this.padFilter.frequency, 360, 2)
+        this.tanpura.on = true
+        this.tanpura.next = Math.max(this.tanpura.next, this.ctx.currentTime + 0.4)
+        choir = 0.06
+        fz('nautilus', 76)
+        break
+      case 'grove':
+        // The tree: Yaman at dusk, the bansuri, harp rising as it grows.
+        set(0.22, 0, 0.5, 0.15, fade)
+        this.ramp(this.padFilter.frequency, 640, 2)
+        this.tanpura.on = true
+        this.tanpura.next = Math.max(this.tanpura.next, this.ctx.currentTime + 0.2)
+        this.flute.on = true
+        this.flute.next = Math.max(this.flute.next, this.ctx.currentTime + 2.5)
+        fz('grove', 84)
+        break
+      case 'dread':
+        // The eye: the floor falls out of the music, a heart racing.
+        set(0.08, 0.35, 0, 0.5, fade)
+        this.ramp(this.tremolo.frequency, 6, 0.5)
+        this.heart.bpm = 72
+        this.heart.amp = 0.32
+        choir = 0.18
+        break
+      case 'run':
+        set(0.2, 0.3, 0, 0.5, fade)
+        this.ramp(this.padFilter.frequency, 900, 1)
+        this.ramp(this.tremolo.frequency, 10, 1)
+        choir = 0.2
+        fz('run', 150)
+        break
+      case 'flight':
+        // On Matsya's back: open sky, 6/8, plucked and sung.
+        set(0.25, 0.15, 0.3, 0.3, fade)
+        this.ramp(this.padFilter.frequency, 1100, 2)
+        this.tanpura.on = true
+        this.flute.on = true
+        this.flute.next = Math.max(this.flute.next, this.ctx.currentTime + 0.8)
+        choir = 0.22
+        fz('flight', 132)
         break
       case 'serene':
         set(0.24, 0, 0.6, 0.04, 3)
@@ -564,6 +658,13 @@ export class Score {
         this.mc.next += 60 / this.mc.bpm / 4
       }
     }
+    if (this.fz.on) {
+      const per = this.fz.kind === 'flight' ? 2 : 4
+      while (this.fz.next < horizon) {
+        this.fzStep(this.fz.step++, this.fz.next)
+        this.fz.next += 60 / this.fz.bpm / per
+      }
+    }
     if (this.heart.bpm > 0) {
       if (this.heart.next < ctx.currentTime) this.heart.next = ctx.currentTime + 0.05
       while (this.heart.next < horizon) {
@@ -590,6 +691,309 @@ export class Score {
       const length = this.bansuri(PHRASES[this.flute.phrase++ % PHRASES.length], this.flute.next, 0.62)
       this.flute.next += length + 5 + (this.flute.phrase % 2) * 3
     }
+  }
+
+  // ------------------------------------------------------------ the forge
+
+  private fzStep(step: number, t: number) {
+    if (this.fz.kind === 'nautilus') this.nautilusStep(step, t)
+    else if (this.fz.kind === 'grove') this.groveStep(step, t)
+    else if (this.fz.kind === 'run') this.runStep(step, t)
+    else this.flightStep(step, t)
+  }
+
+  // The shell, one 16th: a clock ticking in eighths, a gear's thunk on the
+  // bar, and a music box turning a Bhairav figure that climbs an octave as
+  // it goes, the way the spiral winds.
+  private nautilusStep(step: number, t: number) {
+    const s = step % 16
+    const bar = Math.floor(step / 16)
+    const BH = [0, 1, 4, 5, 7, 8, 11, 12]
+    if (s % 2 === 0) this.tick(t, s % 8 === 0 ? 0.14 : s % 4 === 0 ? 0.08 : 0.045)
+    if (s === 0) this.thump(t, 0.2)
+    if (s === 8 && bar % 2 === 1) this.thump(t, 0.08)
+    const box = [7, 5, 4, 1, 0, 1, 4, 5]
+    if (s % 2 === 0) {
+      const d = box[(s / 2 + bar * 3) % 8]
+      const lift = Math.floor(bar / 4) % 3
+      const amp = (s % 4 === 0 ? 0.04 : 0.024) * (bar < 1 ? 0.6 : 1)
+      this.bell(note(24 + BH[d] + lift * 12), amp, t)
+    }
+    // From the fifth bar a low answer in octaves, and a drum every fourth.
+    if (bar >= 4 && s === 12 && bar % 2 === 0) this.bell(note(12 + BH[(bar * 5) % 8]), 0.03, t)
+    if (s === 0 && bar % 4 === 0) this.taiko(t, 0.32)
+  }
+
+  // The grove, one 16th: Yaman chords breathing every two bars, the harp
+  // rising through each, a soft pulse, and a blossom's glint now and then.
+  private groveStep(step: number, t: number) {
+    const s = step % 16
+    const bar = Math.floor(step / 16)
+    const chords = [
+      [0, 4, 7, 11],
+      [5, 9, 12, 16],
+      [2, 6, 9, 13],
+      [4, 7, 11, 14],
+    ]
+    const c = chords[Math.floor(bar / 2) % 4]
+    if (s === 0 && bar % 2 === 0) this.chord(c.map((d) => yaman(d, 2)), 60 / this.fz.bpm * 8, 0.022, 'triangle', 2200)
+    if (s % 2 === 0) {
+      const i = s / 2
+      const d = c[i % 4] + (i >= 4 ? 7 : 0)
+      this.bell(yaman(d, 2), 0.028 * (1 - i * 0.06), t)
+    }
+    if (s === 0 || s === 6) this.thump(t, s === 0 ? 0.09 : 0.05)
+    if (s % 4 === 3 && Math.random() < 0.25) this.bell(yaman(7 + Math.floor(Math.random() * 7), 3), 0.012, t)
+  }
+
+  // The run, one 16th at 150. D minor walking i – VI – III – VII (Dm, B♭, F, C)
+  // the way anime openings climb. level: 1 pulse, 2 groove, 3 all with the
+  // lead, 4 half time (the slide), 5 everything (the swing).
+  private runStep(step: number, t: number) {
+    const L = this.fz.level
+    if (L === 0) return
+    const s = step % 16
+    const bar = Math.floor(step / 16)
+    const roots = [0, -4, 3, -2]
+    const root = roots[bar % 4]
+    const third = bar % 4 === 0 ? 3 : 4
+    // Bass: eighths, jumping the octave.
+    if (s % 2 === 0) this.ost(note(root + [0, 0, 12, 0, 0, 12, 0, 12][s / 2]), t, L === 4 ? 0.03 : 0.04, L === 4 ? 420 : 760)
+    // Hats.
+    if (L !== 4 && s % 2 === 1) this.shime(t, s % 4 === 3 ? 0.06 : 0.035)
+    if (L === 1) return
+    // Kick and snare.
+    if (L === 4) {
+      if (s === 0) this.taiko(t, 0.75)
+      if (s === 8) this.snare(t, 0.3)
+      if (s % 4 === 2) this.ost(note(12 + root), t, 0.02, 500)
+      return
+    }
+    if (s === 0 || s === 6 || s === 10) this.taiko(t, s === 0 ? 0.75 : 0.5)
+    if (s === 4 || s === 12) this.snare(t, 0.3)
+    if (L >= 3 && s === 14) this.snare(t, 0.1)
+    if (L < 3) return
+    // Strings: sixteenths up and down the chord.
+    const arp = [0, 7, 12, third + 12, 19, third + 12, 12, 7]
+    this.ost(note(24 + root + arp[s % 8]), t, 0.018, 2400)
+    // Brass on each bar in the swing; and the lead, phrase by phrase.
+    if (L === 5 && s === 0) this.brass([note(12 + root), note(12 + root + third), note(19 + root), note(24 + root)], t, 0.5, 0.05, false)
+    if (s === 0 && (bar - this.fz.lead) % 4 === 0) this.lead(L === 5 ? 1 : 0, t, 60 / this.fz.bpm)
+  }
+
+  // The run's tune: a call that climbs, falls, and climbs again; the second
+  // half, for the swing, goes all the way up to the high A.
+  private lead(which: number, t0: number, beat: number) {
+    const A: [number | null, number][] = [[31, 1], [36, 1], [38, 0.5], [39, 1.5], [38, 1], [36, 1], [34, 1], [31, 1], [32, 1], [34, 1], [36, 1], [39, 1], [38, 3], [null, 1]]
+    const B: [number | null, number][] = [[39, 1], [41, 1], [43, 2], [41, 1], [39, 1], [38, 2], [36, 1], [38, 1], [39, 1], [41, 1], [43, 4]]
+    let t = t0
+    for (const [n, beats] of which ? B : A) {
+      if (n !== null) this.brass([note(n)], t, beats * beat * 0.92, 0.045, true)
+      t += beats * beat
+    }
+  }
+
+  // On Matsya, one eighth of 6/8: harp in Yaman, a frame drum, open sky.
+  private flightStep(step: number, t: number) {
+    const s = step % 6
+    const bar = Math.floor(step / 6)
+    const up = [0, 0, 3, 4][bar % 4]
+    this.bell(yaman([0, 2, 4, 6, 4, 2][s] + up, 3), s === 0 ? 0.03 : 0.02, t)
+    if (s === 0) this.bell(yaman(up, 1), 0.04, t)
+    if (s === 0) this.taiko(t, 0.3)
+    if (s === 3) this.shime(t, 0.07)
+    if (s === 5 && bar % 2 === 1) this.shime(t, 0.04)
+  }
+
+  // A beat of the run has begun (parkour.ts names them): score it.
+  private runBeat(beat: string) {
+    if (this.fz.kind !== 'run' || !this.fz.on) this.enter('run', 0.4)
+    const t = this.now(0.01)
+    const resync = () => {
+      this.fz.step = 0
+      this.fz.next = this.now(0.02)
+      this.fz.lead = 0
+    }
+    switch (beat) {
+      case 'run':
+        this.fz.level = 2
+        this.taiko(t, 0.9)
+        break
+      case 'leap':
+        // In the air the kick drops out.
+        this.fz.level = 1
+        this.whoosh(0.7, 0.12, false)
+        break
+      case 'reveal':
+        // The world opens: the drums fall away under one great chord.
+        this.fz.level = 0
+        this.taiko(t, 0.8)
+        this.crash(t, 0.12, 3.2)
+        this.brass([note(8), note(20), note(24), note(27), note(32)], t, 1.9, 0.07, true)
+        this.chord([note(20), note(24), note(27), note(32)], 2.2, 0.03, 'sawtooth', 1800)
+        this.ramp(this.layers.choir.gain, 0.5, 0.6)
+        this.whoosh(1.6, 0.16, true)
+        break
+      case 'meadow':
+        this.fz.level = 3
+        resync()
+        this.crash(t, 0.1, 2)
+        this.ramp(this.layers.choir.gain, 0.2, 1.5)
+        break
+      case 'hop':
+      case 'hop2':
+      case 'hop3':
+      case 'crag':
+        this.taiko(t, 0.8)
+        this.brass([note(12), note(19), note(24)], t, 0.25, 0.04, false)
+        this.whoosh(0.5, 0.08, false)
+        break
+      case 'sprint':
+        for (let i = 0; i < 8; i++) this.snare(t + i * (60 / 150 / 4), 0.06 + i * 0.03)
+        break
+      case 'strike':
+        // Falling short: the beat halves, the low strings tighten.
+        this.fz.level = 4
+        this.whoosh(0.8, 0.14, true)
+        this.brass([note(0), note(1), note(7)], t, 1.0, 0.04, true)
+        break
+      case 'slide':
+        this.shing(0.12)
+        this.boom(0.45, 1.6)
+        this.scrape(1.7, 0.1)
+        break
+      case 'flip':
+        this.whoosh(0.9, 0.2, true)
+        this.roll(0.8)
+        break
+      case 'swing':
+        this.thwip(0.14)
+        this.fz.level = 5
+        resync()
+        this.crash(t, 0.12, 2.5)
+        this.ramp(this.layers.choir.gain, 0.55, 0.5)
+        break
+      case 'soar':
+        // The top of the arc: everything stops but one high note and the air
+        // being drawn back in, ending as he dives.
+        this.fz.level = 0
+        this.ramp(this.layers.choir.gain, 0.12, 0.3)
+        this.bell(note(48), 0.05, t)
+        this.held(note(43), 1.1)
+        this.reverseCymbal(0.95, 0.14)
+        break
+      case 'dive':
+        this.fz.level = 1
+        this.riser(1.4, 0.26)
+        this.roll(1.4)
+        this.whoosh(1.4, 0.22, true)
+        break
+      case 'drop':
+        // The groove's own downbeat is the landing's drum.
+        this.fz.level = 3
+        resync()
+        this.crash(t, 0.12, 2.5)
+        this.boom(0.35, 1.8)
+        break
+    }
+  }
+
+  // A snare: the skin's crack and its rattle.
+  private snare(t: number, amp: number) {
+    const ctx = this.ctx!
+    const n = ctx.createBufferSource()
+    n.buffer = this.noiseBuf
+    const bp = ctx.createBiquadFilter()
+    bp.type = 'bandpass'
+    bp.frequency.value = 1900
+    bp.Q.value = 0.7
+    const g = ctx.createGain()
+    g.gain.setValueAtTime(amp, t)
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.16)
+    n.connect(bp).connect(g).connect(this.bus)
+    n.start(t, Math.random() * 2, 0.18)
+    const o = ctx.createOscillator()
+    o.type = 'triangle'
+    o.frequency.setValueAtTime(190, t)
+    o.frequency.exponentialRampToValueAtTime(140, t + 0.06)
+    const og = ctx.createGain()
+    og.gain.setValueAtTime(amp * 0.7, t)
+    og.gain.exponentialRampToValueAtTime(0.0001, t + 0.08)
+    o.connect(og).connect(this.bus)
+    o.start(t)
+    o.stop(t + 0.1)
+  }
+
+  // A blade meeting stone: inharmonic partials ringing, a bright burst.
+  private shing(amp: number) {
+    const ctx = this.ctx!
+    const t = ctx.currentTime
+    ;[1, 2.76, 5.4, 8.93].forEach((m, i) => {
+      const o = ctx.createOscillator()
+      o.frequency.value = 1450 * m
+      const g = ctx.createGain()
+      g.gain.setValueAtTime(amp / (i + 1), t)
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 1.6 / (i * 0.5 + 1))
+      o.connect(g).connect(this.bus)
+      o.start(t)
+      o.stop(t + 1.7)
+    })
+    this.tick(t, amp * 2)
+  }
+
+  // Steel dragged down rock: noise through a narrow band sliding down,
+  // shuddering, fading as he slows.
+  private scrape(dur: number, amp: number) {
+    const ctx = this.ctx!
+    const t = ctx.currentTime
+    const n = ctx.createBufferSource()
+    n.buffer = this.noiseBuf
+    const bp = ctx.createBiquadFilter()
+    bp.type = 'bandpass'
+    bp.Q.value = 3
+    bp.frequency.setValueAtTime(3400, t)
+    bp.frequency.exponentialRampToValueAtTime(900, t + dur)
+    const g = ctx.createGain()
+    g.gain.setValueAtTime(amp, t)
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur)
+    const shudder = ctx.createOscillator()
+    shudder.frequency.value = 23
+    const depth = ctx.createGain()
+    depth.gain.value = amp * 0.5
+    shudder.connect(depth).connect(g.gain)
+    n.connect(bp).connect(g).connect(this.bus)
+    n.start(t, Math.random(), dur + 0.1)
+    shudder.start(t)
+    shudder.stop(t + dur + 0.1)
+  }
+
+  // A rope fired: a snap of air rising, and the line's twang as it bites.
+  private thwip(amp: number) {
+    const ctx = this.ctx!
+    const t = ctx.currentTime
+    const n = ctx.createBufferSource()
+    n.buffer = this.noiseBuf
+    const bp = ctx.createBiquadFilter()
+    bp.type = 'bandpass'
+    bp.Q.value = 2
+    bp.frequency.setValueAtTime(600, t)
+    bp.frequency.exponentialRampToValueAtTime(4200, t + 0.14)
+    const g = ctx.createGain()
+    g.gain.setValueAtTime(amp, t)
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.18)
+    n.connect(bp).connect(g).connect(this.bus)
+    n.start(t, Math.random(), 0.2)
+    const o = ctx.createOscillator()
+    o.type = 'triangle'
+    o.frequency.setValueAtTime(140, t + 0.16)
+    o.frequency.exponentialRampToValueAtTime(110, t + 0.6)
+    const og = ctx.createGain()
+    og.gain.setValueAtTime(0, t + 0.15)
+    og.gain.linearRampToValueAtTime(amp * 0.8, t + 0.17)
+    og.gain.exponentialRampToValueAtTime(0.0001, t + 0.7)
+    o.connect(og).connect(this.bus)
+    o.start(t + 0.15)
+    o.stop(t + 0.75)
   }
 
   // ------------------------------------------------------------ the entrance theme
@@ -1171,8 +1575,10 @@ const SCENE_OF: Record<string, Scene> = {
   follow: 'fall',
   impact: 'serene',
   arrive: 'serene',
-  'forge-spiral': 'mc1',
-  'forge-tree': 'mc2',
-  'forge-sky': 'mc3',
-  'forge-ride': 'mc4',
+  'forge-spiral': 'nautilus',
+  'forge-tree': 'grove',
+  'forge-eye': 'dread',
+  'forge-cut': 'silence',
+  'forge-sky': 'run',
+  'forge-ride': 'flight',
 }

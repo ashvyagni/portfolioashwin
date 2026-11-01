@@ -19,6 +19,8 @@ export type Repo = {
   fork: boolean
   topics: string[]
   default_branch: string
+  // From the snapshot: the README's path, null if there is none.
+  readme?: string | null
 }
 
 const USER = CONTACT.githubUser
@@ -47,6 +49,15 @@ export function loadRepos(): Promise<Repo[]> {
 }
 
 const readmes = new Map<string, Promise<string | null>>()
+// What the snapshot knows about each README, by repository name.
+let knownReadmes: Promise<Map<string, string | null>> | null = null
+const readmeOf = (name: string) => {
+  knownReadmes ??= fetch('/repos.json')
+    .then((r) => (r.ok ? r.json() : []))
+    .then((list: Repo[]) => new Map(list.filter((r) => r.readme !== undefined).map((r) => [r.name, r.readme ?? null])))
+    .catch(() => new Map())
+  return knownReadmes.then((m) => (m.has(name) ? m.get(name)! : undefined))
+}
 
 // The README as safe HTML, its relative links and images pointed at the repository.
 export function loadReadme(repo: Repo): Promise<string | null> {
@@ -56,7 +67,9 @@ export function loadReadme(repo: Repo): Promise<string | null> {
       (async () => {
         const branch = repo.default_branch || 'HEAD'
         const raw = `https://raw.githubusercontent.com/${USER}/${repo.name}/${branch}/`
-        for (const file of ['README.md', 'readme.md', 'Readme.md', 'README.MD', 'README']) {
+        const known = repo.readme !== undefined ? repo.readme : await readmeOf(repo.name)
+        if (known === null) return null
+        for (const file of known ? [known] : ['README.md', 'readme.md', 'Readme.md', 'README.MD', 'README']) {
           try {
             const res = await fetch(raw + file)
             if (!res.ok) continue

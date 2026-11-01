@@ -424,7 +424,7 @@ export function createSky() {
   const b = new THREE.Vector3()
   const fwd = new THREE.Vector3()
   const axis = new THREE.Vector3()
-  const state = { leap: 0, dark: 0, shake: 0, riding: 0, landed: 0, speed: 0, white: 0 }
+  const state = { leap: 0, dark: 0, shake: 0, riding: 0, landed: 0, speed: 0, white: 0, beat: '' }
   const lastPos = new THREE.Vector3()
   let lastTime = 0
 
@@ -567,6 +567,7 @@ export function createSky() {
     hero.group.visible = inScene
     const running = run > 0 && ride <= 0 && fall <= 0
     state.white = 0
+    state.beat = ''
     let roll = 0
     let fov = 52
     let ropeOn = false
@@ -602,6 +603,7 @@ export function createSky() {
       state.leap = m.leap
       state.shake = Math.max(state.shake, m.shake)
       state.white = m.white
+      state.beat = m.beat
       // The cloud he tears through stays torn behind him.
       const into = ['dive', 'drop'].includes(m.beat)
       park.tear(park.diveIn, into ? m.feet : park.diveIn, into ? 1 : 0, time)

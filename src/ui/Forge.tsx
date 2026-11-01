@@ -70,7 +70,7 @@ const LEAP = 1.4
 const STILL = 1.4
 const reduceMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches
 // The story's beats, for the score to build on before the rift.
-const CUES: Partial<Record<Stage, string>> = { spiral: 'forge-spiral', tree: 'forge-tree', sky: 'forge-sky', ride: 'forge-ride' }
+const CUES: Partial<Record<Stage, string>> = { spiral: 'forge-spiral', tree: 'forge-tree', eye: 'forge-eye', sky: 'forge-sky', ride: 'forge-ride' }
 const clamp01 = (x: number) => Math.min(Math.max(x, 0), 1)
 const easeOut01 = (x: number) => 1 - Math.pow(1 - clamp01(x), 3)
 const smooth = (a: number, b: number, x: number) => {
@@ -218,6 +218,8 @@ export function Forge({ onBack, landing, score }: Props) {
     let cutAt = -1
     let eyeDone = false
     let skyAt = -1
+    let runBeat = ''
+    let heard = 0
     let songAt = -1
     let skipTo = -1
     let landedAt = -1
@@ -359,6 +361,15 @@ export function Forge({ onBack, landing, score }: Props) {
         const rush = fallT >= 0 ? smooth(0.06, 0.8, descend) * (1 - still) : 0
         world.render(sky.scene, sky.camera, sk, time, { zoom: 0.25 * sky.state.leap + 0.45 * rush, shake: 0.004 * sky.state.shake + 0.005 * rush, flash: sky.state.white })
         if (fallT < 0) overlay.speed(Math.max(sky.state.speed - 9, 0) / 12, time)
+        // The score follows the run beat by beat, and hears the cloud.
+        if (sky.state.beat !== runBeat) {
+          runBeat = sky.state.beat
+          if (runBeat && fallT < 0) score.cue('run-' + runBeat)
+        }
+        if (Math.abs(sky.state.white - heard) > 0.02 || (heard > 0 && sky.state.white === 0)) {
+          heard = sky.state.white
+          score.muffle(heard)
+        }
         overlay.air(rush, time, false)
         // The new world comes in under the frozen one: the drawing fades as
         // the pattern waves spiral in.
@@ -384,6 +395,7 @@ export function Forge({ onBack, landing, score }: Props) {
             world.render(tree.scene, tree.camera, tree.sketch, time)
             sky.build(world.capture(), landing, { x: eyeOnScreen.x / innerWidth, y: eyeOnScreen.y / innerHeight, w: (Math.min(innerWidth, innerHeight) * 0.07) / innerWidth })
             cutAt = time
+            score.cue('forge-cut')
           }
           if (eyeT >= EYE_CUT) {
             sky.update(time - cutAt, 0, 0, 0, time)

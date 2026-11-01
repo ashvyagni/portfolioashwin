@@ -720,6 +720,26 @@ a {
   padding: 0 var(--gutter) 10vh;
   pointer-events: none;
 }
+.title-card {
+  transition: opacity 0.5s ease;
+}
+/* Until the particles have brought it together. */
+.title-card.is-waiting {
+  opacity: 0;
+}
+.forge .skip {
+  position: fixed;
+  right: var(--gutter);
+  bottom: 48px;
+  z-index: 33;
+  font: 11px var(--mono);
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--f-bone);
+  padding: 10px 16px;
+  border: 1px solid var(--f-bone-faint);
+  background: rgba(8, 7, 10, 0.55);
+}
 .title-card__chapter {
   font: 11px var(--mono);
   letter-spacing: 0.3em;

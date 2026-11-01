@@ -21,7 +21,9 @@ export const SONGS: Song[] = [
 ]
 
 export function pickSong(): Song {
-  return SONGS[Math.floor(Math.random() * SONGS.length)]
+  // `?song=dolare` (or bajesh) pins it; otherwise, the luck of the draw.
+  const asked = new URLSearchParams(location.search).get('song')
+  return SONGS.find((s) => s.id === asked) ?? SONGS[Math.floor(Math.random() * SONGS.length)]
 }
 
 // How loud the song is now, in three bands (0 … 1), smoothed.

@@ -27,7 +27,9 @@ void main() {
   vec2 p = uFocus + (aHome - uFocus) * uZoom;
   p += (uRes * 0.5 - uFocus) * smoothstep(1.0, 3.0, uZoom);
   // Gather in from a scatter.
-  vec2 away = vec2(hash(aSeed) - 0.5, hash(aSeed + 3.1) - 0.5) * uRes * 1.2;
+  // Drawn in from either side of the screen, like the title's particles.
+  float side = hash(aSeed + 5.0) > 0.5 ? 1.0 : -1.0;
+  vec2 away = vec2(side * (uRes.x * 0.6 + hash(aSeed) * uRes.x * 0.5), (hash(aSeed + 3.1) - 0.5) * uRes.y * 0.9) - (aHome - uRes * 0.5) * vec2(1.0, 0.0);
   float g = smoothstep(0.0, 1.0, clamp(uGather * 1.4 - hash(aSeed + 7.7) * 0.4, 0.0, 1.0));
   p = mix(p + away, p, g);
   // Pushed aside by the cursor.

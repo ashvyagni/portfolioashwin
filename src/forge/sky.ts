@@ -395,7 +395,7 @@ export function createSky() {
 
   // cut: seconds since the page was cut; run: 0 … 1 across the debris;
   // ride: 0 … 1 on Matsya; fall: 0 … 1 down into the dark.
-  function update(cut: number, run: number, ride: number, fall: number, time: number, glide = 0) {
+  function update(cut: number, run: number, ride: number, fall: number, time: number, descend = 0) {
     const dt = Math.min(Math.max(time - lastTime, 0), 0.05)
     lastTime = time
     if (!pieces.length) return
@@ -462,9 +462,10 @@ export function createSky() {
     }
 
     // Matsya swims up under the last piece; you ride it; you leap.
-    const swimU = ride > 0 ? ride : Math.max(run - 0.82, 0) * 0.5
+    const swimU = ride > 0 ? ride + descend * 0.8 : Math.max(run - 0.82, 0) * 0.5
     swimPath(swimU, matsya.group.position)
     swimPath(swimU + 0.01, b)
+    if (descend > 0) matsya.group.position.y -= descend * 10
     matsya.group.lookAt(b)
     matsya.group.rotateY(-Math.PI / 2)
     matsya.swim(dt, 0.6 + ride, 1)
@@ -482,20 +483,30 @@ export function createSky() {
     }
     state.dark = 0
     if (fall > 0) {
-      // Off Matsya's back and up into the open sky, looking ahead: there,
-      // the rift will open.
+      // Off Matsya's back and up into the open sky…
       swimPath(1, a)
       swimPath(1.02, b)
       const ahead = b.clone().sub(a).setY(0).normalize()
       const off = easeOut(fall)
-      // Then (the cutscene) up and away, turning to look back over the whole
-      // of the debris world as it loses its colour and comes apart.
-      const g = Math.min(glide / 2.2, 1)
-      const turn = easeInOut(g)
-      pos.copy(a).add(new THREE.Vector3(0, KOI * 0.13 + EYE + Math.sin(Math.min(off, 0.7) / 0.7 * Math.PI * 0.5) * 4 + turn * 22, 0)).addScaledVector(ahead, off * 14 - turn * 46)
-      const forward = pos.clone().addScaledVector(ahead, 20).add(new THREE.Vector3(0, 1.5 * off, 0))
-      look.lerpVectors(forward, routeCentre, turn)
-      state.leap = 0.6 * (1 - off) + 0.2
+      const leapPos = a.clone().add(new THREE.Vector3(0, KOI * 0.13 + EYE + Math.sin((Math.min(off, 0.7) / 0.7) * Math.PI * 0.5) * 4, 0)).addScaledVector(ahead, off * 14)
+      const leapLook = leapPos.clone().addScaledVector(ahead, 20).add(new THREE.Vector3(0, 1.5 * off, 0))
+      pos.copy(leapPos)
+      look.copy(leapLook)
+      if (descend > 0) {
+        // …and then the long fall: a slow orbit down round the whole debris
+        // world, watching it as reality comes apart around it.
+        const r0 = Math.hypot(leapPos.x - routeCentre.x, leapPos.z - routeCentre.z)
+        const th0 = Math.atan2(leapPos.z - routeCentre.z, leapPos.x - routeCentre.x)
+        const e = easeInOut(descend)
+        const th = th0 + descend * Math.PI * 1.5
+        const R = r0 + (26 - r0) * e
+        const y = leapPos.y + (routeCentre.y - 2 - leapPos.y) * e + Math.sin(descend * Math.PI) * 7
+        const orbit = new THREE.Vector3(routeCentre.x + Math.cos(th) * R, y, routeCentre.z + Math.sin(th) * R)
+        const blend = easeInOut(Math.min(descend / 0.12, 1))
+        pos.lerpVectors(leapPos, orbit, blend)
+        look.lerpVectors(leapLook, routeCentre.clone().add(new THREE.Vector3(0, Math.sin(descend * Math.PI * 2) * 2, 0)), blend)
+      }
+      state.leap = 0.3 * (1 - off)
     }
     state.speed = lastPos.distanceTo(pos) / Math.max(dt, 1 / 120)
     lastPos.copy(pos)

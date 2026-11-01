@@ -1,9 +1,5 @@
-import * as THREE from 'three'
-import { Writer, clamp01, hash, smooth } from './ink'
+import { Writer, hash, smooth } from './ink'
 import { P } from './palette'
-import { onScreen } from './world'
-import type { Tag } from './tree3d'
-import type { Milestone } from '../content/forge'
 
 // The hand over the drawing: everything written or struck onto the page
 // rather than modelled — the milestones' words beside their plaques, each
@@ -12,7 +8,6 @@ import type { Milestone } from '../content/forge'
 
 const SERIF = "'Instrument Serif', serif"
 const MONO = "'JetBrains Mono Variable', monospace"
-const DEVA = "'Kalam', serif"
 const HAND = "'Kalam', cursive"
 
 // The eye, drawn into a canvas (it hangs in the sky as the moon's face):
@@ -136,9 +131,6 @@ export function createOverlay(canvas: HTMLCanvasElement) {
   let H = 1
   let m = 1
   let dpr = 1
-  const probe = { x: 0, y: 0, visible: false, depth: 0 }
-  const probe2 = { x: 0, y: 0, visible: false, depth: 0 }
-  const tmp = new THREE.Vector3()
 
   function resize(w: number, h: number) {
     W = w
@@ -157,68 +149,86 @@ export function createOverlay(canvas: HTMLCanvasElement) {
     ctx.clearRect(0, 0, W, H)
   }
 
-  // ---- the milestones, written beside their plaques as you come up to them
-  function milestones(plaques: { centre: THREE.Vector3; size: number; m: Milestone }[], camera: THREE.Camera, dark: number) {
-    plaques.forEach((pl, i) => {
-      onScreen(pl.centre, camera, W, H, probe)
-      if (!probe.visible) return
-      tmp.copy(pl.centre).y += pl.size
-      onScreen(tmp, camera, W, H, probe2)
-      const px = Math.abs(probe2.y - probe.y)
-      const k = smooth(m * 0.05, m * 0.12, px) * (1 - smooth(m * 0.5, m * 0.8, px))
-      if (k <= 0.01) return
-      const write = smooth(m * 0.06, m * 0.2, px)
-      const ink = dark > 0.5 ? P.bone : P.sepia
-      const red = dark > 0.5 ? P.gold : P.vermilion
-      const size = Math.min(Math.max(px * 0.35, 18), 64)
-      const x = probe.x + px * 0.95
-      const y = probe.y - px * 0.25
-      ctx.save()
-      ctx.globalAlpha = k
-      writer.write(writer.image(`MILESTONE ${String(i + 1).padStart(2, '0')} · ${pl.m.year.toUpperCase()}`, `${Math.round(size * 0.32)}px ${MONO}`, red), x, y - size * 0.9, write, 1, 0)
-      writer.write(writer.image(pl.m.title, `italic ${Math.round(size)}px ${SERIF}`, ink), x, y, write, 1, 0)
-      writer.write(writer.image(pl.m.note, `${Math.round(size * 0.42)}px ${HAND}`, ink), x, y + size * 0.85, clamp01(write * 1.2 - 0.2), 0.9, 0)
-      // A pencil line from the words to the plaque.
-      ctx.strokeStyle = ink
-      ctx.globalAlpha = k * 0.6
-      ctx.lineWidth = 1
-      ctx.beginPath()
-      ctx.moveTo(x - 6, y)
-      ctx.quadraticCurveTo((x + probe.x) / 2, y + 10, probe.x + px * 0.3, probe.y)
-      ctx.stroke()
-      ctx.restore()
-    })
+  // ---- a card on the page: deckled paper, an inked edge, a seal; used for
+  // each milestone down the spiral and each branch of the tree, one at a
+  // time, large enough to read, a pencil line to the thing it names.
+  function slip(x: number, y: number, w: number, h: number, seed: number) {
+    ctx.beginPath()
+    const n = 22
+    for (let i = 0; i <= n; i++) ctx.lineTo(x + (w * i) / n, y + (hash(i + seed) - 0.5) * 3)
+    for (let i = 0; i <= 8; i++) ctx.lineTo(x + w + (hash(i * 3 + seed) - 0.5) * 3, y + (h * i) / 8)
+    for (let i = n; i >= 0; i--) ctx.lineTo(x + (w * i) / n, y + h + (hash(i * 7 + seed) - 0.5) * 3)
+    for (let i = 8; i >= 0; i--) ctx.lineTo(x + (hash(i * 5 + seed) - 0.5) * 3, y + (h * i) / 8)
+    ctx.closePath()
   }
-
-  // ---- the domains: name and tools beside each ema, for the nearest few
-  function tags(list: Tag[], camera: THREE.Camera) {
-    const near = list
-      .map((t) => {
-        onScreen(t.slip.getWorldPosition(tmp), camera, W, H, probe)
-        return { t, x: probe.x, y: probe.y, visible: probe.visible && t.group.scale.x > 0.6, dist: camera.position.distanceTo(tmp) }
-      })
-      .filter((t) => t.visible && t.y > H * 0.08 && t.y < H * 0.92 && t.x > W * 0.05 && t.x < W * 0.95)
-      .sort((a, b) => a.dist - b.dist)
-      .slice(0, 2)
-    near.forEach(({ t, x, y }, i) => {
-      // The nearest to one side, the next to the other, never on top of each other.
-      const right = i === 0 ? x < W * 0.6 : !(near[0].x < W * 0.6)
-      const tx = right ? x + 46 : x - 46
-      const align = right ? 0 : 1
-      const fade = 1 - i * 0.28
-      ctx.save()
-      ctx.globalAlpha = fade
-      ctx.strokeStyle = P.sepia
-      ctx.lineWidth = 1
+  function card(k: number, side: 'left' | 'right', head: string, title: string, sub: string, lines: string[], anchor: { x: number; y: number; visible: boolean } | null, seed: number, dark = false) {
+    if (k <= 0.01) return
+    const w = Math.min(W * 0.36, 380)
+    const lh = Math.round(m * 0.026)
+    const cols = lines.length > 6 ? 2 : 1
+    const rows = Math.ceil(lines.length / cols)
+    const h = 112 + rows * (lh + 6) + (sub ? 30 : 0)
+    const x = side === 'left' ? W * 0.05 : W * 0.95 - w
+    const y = H * 0.56 - h / 2 + (1 - k) * 24
+    ctx.save()
+    ctx.globalAlpha = k
+    // The leader line first, under the card.
+    if (anchor?.visible) {
+      ctx.strokeStyle = dark ? 'rgba(242, 178, 74, 0.8)' : 'rgba(42, 29, 20, 0.75)'
+      ctx.lineWidth = 1.2
+      ctx.setLineDash([5, 4])
       ctx.beginPath()
-      ctx.moveTo(x + (right ? 14 : -14), y - 40)
-      ctx.lineTo(tx + (right ? -6 : 6), y - 40)
+      const fx = side === 'left' ? x + w : x
+      ctx.moveTo(fx, y + 40)
+      ctx.quadraticCurveTo((fx + anchor.x) / 2, Math.min(y, anchor.y) - 30, anchor.x, anchor.y)
       ctx.stroke()
-      writer.write(writer.image(t.domain.name, `italic ${Math.round(m * 0.036)}px ${SERIF}`, P.sepia), tx, y - 48, 1, 1, align)
-      writer.write(writer.image(t.domain.hi, `700 ${Math.round(m * 0.026)}px ${DEVA}`, P.vermilion), tx, y - 18, 1, 1, align)
-      t.domain.leaves.forEach((leaf, j) => writer.write(writer.image(leaf, `${Math.round(m * 0.017)}px ${MONO}`, 'rgba(42,29,20,0.85)'), tx, y + 8 + j * m * 0.024, 1, 1, align))
-      ctx.restore()
+      ctx.setLineDash([])
+      ctx.beginPath()
+      ctx.arc(anchor.x, anchor.y, 5, 0, Math.PI * 2)
+      ctx.fillStyle = P.vermilion
+      ctx.fill()
+    }
+    ctx.fillStyle = 'rgba(20, 12, 8, 0.25)'
+    ctx.fillRect(x + 6, y + 7, w, h)
+    slip(x, y, w, h, seed)
+    ctx.fillStyle = dark ? '#141016' : '#F4EDDD'
+    ctx.fill()
+    ctx.strokeStyle = dark ? P.gold : P.sepia
+    ctx.lineWidth = 1.4
+    ctx.stroke()
+    // The seal.
+    ctx.fillStyle = P.vermilion
+    ctx.fillRect(x + w - 46, y + 14, 30, 30)
+    ctx.fillStyle = '#FCEFE6'
+    ctx.font = `13px ${MONO}`
+    ctx.textAlign = 'center'
+    ctx.fillText(String(seed % 100).padStart(2, '0'), x + w - 31, y + 34)
+    ctx.textAlign = 'left'
+    const ink = dark ? P.bone : P.sepia
+    ctx.fillStyle = dark ? P.gold : P.vermilion
+    ctx.font = `11px ${MONO}`
+    ctx.fillText(head, x + 20, y + 30)
+    ctx.fillStyle = ink
+    ctx.font = `italic ${Math.round(m * 0.05)}px ${SERIF}`
+    ctx.fillText(title, x + 20, y + 74, w - 80)
+    let cy = y + 74
+    if (sub) {
+      cy += 30
+      ctx.font = `${Math.round(m * 0.024)}px ${HAND}`
+      ctx.fillStyle = dark ? P.gold : P.vermilion
+      ctx.fillText(sub, x + 20, cy, w - 40)
+    }
+    ctx.fillStyle = ink
+    ctx.font = `${lh * 0.62}px ${MONO}`
+    const colW = (w - 40) / cols
+    lines.forEach((line, i) => {
+      const c = Math.floor(i / rows)
+      const r = i % rows
+      // Written on one by one as the card comes in.
+      if (i / lines.length > k * 1.4) return
+      ctx.fillText(`· ${line}`, x + 20 + c * colW, cy + 30 + r * (lh + 6), colW - 8)
     })
+    ctx.restore()
   }
 
   // ---- the eye's rays
@@ -373,5 +383,119 @@ export function createOverlay(canvas: HTMLCanvasElement) {
     ctx.restore()
   }
 
-  return { resize, begin, milestones, tags, rays, gather, impact, speed, air, drop, size: () => ({ W, H, m }) }
+  // ---- the drop: Conway's Game of Life, in the song's colours. A burst of
+  // cells, seeded thick, living and dying a generation every 70 ms — the
+  // world's old order breaking down to rules — thinning as the forge forms.
+  let lifeGrid: Uint8Array | null = null
+  let lifeNext: Uint8Array | null = null
+  let lifeCols = 0
+  let lifeRows = 0
+  let lifeGen = -1
+  function life(t: number, pal: [string, string, string], accent: string) {
+    const cell = Math.max(8, Math.round(m / 70))
+    if (t < 0.05 || !lifeGrid || lifeCols !== Math.ceil(W / cell)) {
+      lifeCols = Math.ceil(W / cell)
+      lifeRows = Math.ceil(H / cell)
+      lifeGrid = new Uint8Array(lifeCols * lifeRows)
+      lifeNext = new Uint8Array(lifeCols * lifeRows)
+      for (let y = 0; y < lifeRows; y++) {
+        for (let x = 0; x < lifeCols; x++) {
+          const dx = x / lifeCols - 0.5
+          const dy = y / lifeRows - 0.5
+          const ring = Math.abs(Math.hypot(dx * 1.6, dy) - 0.32)
+          lifeGrid[y * lifeCols + x] = Math.random() < 0.55 * Math.exp(-ring * ring * 30) + 0.08 ? 1 : 0
+        }
+      }
+      lifeGen = 0
+    }
+    const gen = Math.floor(t / 0.07)
+    while (lifeGen < gen) {
+      const g = lifeGrid!
+      const n = lifeNext!
+      for (let y = 0; y < lifeRows; y++) {
+        for (let x = 0; x < lifeCols; x++) {
+          let c = 0
+          for (let j = -1; j <= 1; j++) {
+            for (let i = -1; i <= 1; i++) {
+              if (i || j) c += g[((y + j + lifeRows) % lifeRows) * lifeCols + ((x + i + lifeCols) % lifeCols)]
+            }
+          }
+          const alive = g[y * lifeCols + x]
+          n[y * lifeCols + x] = c === 3 || (alive && c === 2) ? 1 : 0
+        }
+      }
+      lifeGrid = n
+      lifeNext = g
+      lifeGen++
+    }
+    const fade = 1 - smooth(1.2, 3.0, t)
+    if (fade <= 0) return
+    ctx.save()
+    ctx.globalAlpha = fade
+    for (let y = 0; y < lifeRows; y++) {
+      for (let x = 0; x < lifeCols; x++) {
+        if (!lifeGrid![y * lifeCols + x]) continue
+        const k = hash(x * 7.1 + y * 3.3)
+        ctx.fillStyle = k > 0.8 ? accent : k > 0.4 ? pal[2] : pal[1]
+        ctx.fillRect(x * cell + 1, y * cell + 1, cell - 2, cell - 2)
+      }
+    }
+    ctx.restore()
+  }
+
+  // ---- text that comes together from particles: the DOM text in an element
+  // is sampled where it sits, and particles stream in from either side to
+  // its glyphs; when they arrive, the real text takes over.
+  type Grain = { x: number; y: number; sx: number; sy: number; delay: number; color: string }
+  function prepareAssembly(root: HTMLElement | null) {
+    const grains: Grain[] = []
+    if (!root) return grains
+    const off = document.createElement('canvas')
+    off.width = Math.ceil(W)
+    off.height = Math.ceil(H)
+    const g = off.getContext('2d', { willReadFrequently: true })!
+    const parts = [...root.querySelectorAll<HTMLElement>('[aria-label], h2, p')].filter((e) => !e.querySelector('[aria-label]'))
+    const colours: string[] = []
+    parts.forEach((el, i) => {
+      const text = el.getAttribute('aria-label') ?? el.textContent ?? ''
+      if (!text.trim()) return
+      const r = el.getBoundingClientRect()
+      const cs = getComputedStyle(el)
+      g.clearRect(0, 0, off.width, off.height)
+      g.font = `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`
+      g.fillStyle = '#fff'
+      g.textBaseline = 'top'
+      g.textAlign = 'left'
+      const tw = g.measureText(text).width
+      const x = cs.textAlign === 'right' || cs.textAlign === 'end' ? r.right - tw : r.left
+      g.fillText(text, x, r.top + (r.height - parseFloat(cs.fontSize)) / 2)
+      const data = g.getImageData(0, 0, off.width, off.height).data
+      const step = Math.max(2, Math.round(parseFloat(cs.fontSize) / 22))
+      colours[i] = cs.color
+      for (let y = Math.max(0, Math.floor(r.top - 10)); y < Math.min(off.height, r.bottom + 10); y += step) {
+        for (let xx = Math.max(0, Math.floor(r.left - 40)); xx < Math.min(off.width, r.right + 40); xx += step) {
+          if (data[(y * off.width + xx) * 4 + 3] < 128) continue
+          const side = Math.random() < 0.5 ? -1 : 1
+          grains.push({ x: xx, y, sx: side < 0 ? -40 - Math.random() * W * 0.3 : W + 40 + Math.random() * W * 0.3, sy: y + (Math.random() - 0.5) * H * 0.6, delay: Math.random() * 0.35, color: cs.color })
+        }
+      }
+    })
+    return grains
+  }
+  function assemble(grains: Grain[], k: number) {
+    if (k <= 0 || k >= 1) return
+    ctx.save()
+    for (const p of grains) {
+      const t = Math.min(Math.max((k - p.delay) / 0.6, 0), 1)
+      const e = 1 - Math.pow(1 - t, 3)
+      ctx.fillStyle = p.color
+      ctx.globalAlpha = 0.35 + 0.65 * e
+      const x = p.sx + (p.x - p.sx) * e
+      const y = p.sy + (p.y - p.sy) * e
+      ctx.fillRect(x, y, 2, 2)
+    }
+    ctx.restore()
+  }
+
+  return { resize, begin, card, rays, gather, impact, speed, air, drop, life, prepareAssembly, assemble, size: () => ({ W, H, m }) }
 }

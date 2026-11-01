@@ -235,7 +235,7 @@ export function createSpiral() {
   const plaques = plaqueChambers.map((th, i) => {
     const a = th + SEPT / 2
     const r = R(a - 2 * Math.PI) + (R(a) - R(a - 2 * Math.PI)) * 0.78
-    const size = r * 0.13
+    const size = r * 0.24
     const g = new THREE.Group()
     const p = new THREE.Mesh(new THREE.BoxGeometry(size * 1.6, size, size * 0.05), plaqueMat)
     p.position.y = size * 0.62
@@ -312,6 +312,8 @@ export function createSpiral() {
   // u: 0 … 1 down the spiral.
   function update(u: number, time: number) {
     gears.forEach((g) => (g.m.rotation.z = time * 0.1 * g.dir))
+    // The plaques turn to face you as you come down past them.
+    plaques.forEach((p) => p.group.lookAt(camera.position.x, p.group.position.y + (camera.position.y - p.group.position.y) * 0.5, camera.position.z))
     const dive = easeInOut(clamp01(u / 0.16))
     const fly = clamp01((u - 0.1) / 0.86)
     const th = TH_MAX - 0.4 - (TH_MAX - TH_MIN - 1.2) * Math.pow(fly, 0.9)

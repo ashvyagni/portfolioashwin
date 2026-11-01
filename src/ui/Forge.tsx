@@ -57,18 +57,15 @@ const ORBIT_COUNT = 14
 const SPIRAL_END = 0.5
 const EYE_CUT = 3.3
 const EYE_LENGTH = 4.4
-// The breaking point: a cutscene off Matsya's back. The song is started at
-// its first frame so that its first beat drop lands at DROP.
-const DROP = 4.2
-const BREAK_LENGTH = 5
-// Brief monochrome frames as reality gives (start, length, negative?): at
-// most two a second, none for anyone who asks for less motion.
-const FLICKERS: [number, number, boolean][] = [
-  [1.5, 0.1, false],
-  [2.05, 0.08, true],
-  [2.6, 0.12, false],
-  [3.1, 0.08, true],
-]
+// After the eye cuts the page, the sky is one cutscene on its own clock:
+// a run across the debris, a ride on Matsya, the leap, and the long fall —
+// as long as the song's run-up, which starts from its first second as you
+// leave Matsya — glitching more and more, until the world holds still, the
+// pattern waves spiral in, and on the drop you are in the forge.
+const RUN = 11
+const RIDE = 5
+const LEAP = 1.4
+const STILL = 1.4
 const reduceMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches
 // The story's beats, for the score to build on before the rift.
 const CUES: Partial<Record<Stage, string>> = { spiral: 'forge-spiral', tree: 'forge-tree', sky: 'forge-sky', ride: 'forge-ride' }
@@ -77,6 +74,10 @@ const easeOut01 = (x: number) => 1 - Math.pow(1 - clamp01(x), 3)
 const smooth = (a: number, b: number, x: number) => {
   const t = clamp01((x - a) / (b - a))
   return t * t * (3 - 2 * t)
+}
+const hash01 = (n: number) => {
+  const x = Math.sin(n * 127.1 + 311.7) * 43758.5453
+  return x - Math.floor(x)
 }
 const ease = (x: number) => {
   const t = clamp01(x)
@@ -88,7 +89,6 @@ export function Forge({ onBack, landing, score }: Props) {
   const [song] = useState(pickSong)
   const scroller = useRef<HTMLDivElement>(null)
   const descentSec = useRef<HTMLElement>(null)
-  const skySec = useRef<HTMLElement>(null)
   const titleSec = useRef<HTMLElement>(null)
   const orbitSec = useRef<HTMLElement>(null)
   const wavesCv = useRef<HTMLCanvasElement>(null)
@@ -97,6 +97,8 @@ export function Forge({ onBack, landing, score }: Props) {
   const worldCv = useRef<HTMLCanvasElement>(null)
   const overlayCv = useRef<HTMLCanvasElement>(null)
   const pctRef = useRef<HTMLSpanElement>(null)
+  const titleCardRef = useRef<HTMLDivElement>(null)
+  const skipRef = useRef(-1)
   const [repos, setRepos] = useState<Repo[] | null>(null)
   const [stage, setStage] = useState<Stage>('spiral')
   const [open, setOpen] = useState<number | null>(null)
@@ -211,11 +213,15 @@ export function Forge({ onBack, landing, score }: Props) {
     let eyeAt = -1
     let cutAt = -1
     let eyeDone = false
-    let riftAt = -1
-    let riftDone = false
+    let skyAt = -1
+    let songAt = -1
+    let skipTo = -1
     let landedAt = -1
+    let assembling: ReturnType<typeof overlay.prepareAssembly> | null = null
     let current: Stage = 'spiral'
     const eyeOnScreen = { x: 0, y: 0, visible: false, depth: 0 }
+    const probe = { x: 0, y: 0, visible: false, depth: 0 }
+    const probeV = new THREE.Vector3()
     const hold = (on: boolean) => (el.style.overflowY = on ? 'hidden' : '')
     const show = (c: HTMLCanvasElement | null, on: boolean) => {
       if (c) c.style.visibility = on ? 'visible' : 'hidden'
@@ -229,13 +235,15 @@ export function Forge({ onBack, landing, score }: Props) {
       const vh = innerHeight
       const top = el.scrollTop
       const dP = progress(descentSec.current!)
-      const sP = progress(skySec.current!)
       const tP = progress(titleSec.current!)
       const oP = progress(orbitSec.current!)
-      const skyTop = skySec.current!.offsetTop
       const titleTop = titleSec.current!.offsetTop
       const orbitEl = orbitSec.current!
       overlay.begin(time)
+      if (skipRef.current >= 0) {
+        skipTo = RUN + RIDE + song.from - 0.6
+        skipRef.current = -1
+      }
       // Dev only: hold any moment of a scene, e.g. forgeDebug = { fluid: 6 }.
       const dbg = import.meta.env.DEV ? (window as unknown as { forgeDebug?: { tree?: number; spiral?: number } }).forgeDebug : undefined
       if (dbg) {
@@ -261,84 +269,87 @@ export function Forge({ onBack, landing, score }: Props) {
         eyeDone = true
         hold(false)
       }
-      const inDescent = top < skyTop - vh * 0.02
+      const inDescent = top < titleTop - vh * 0.5
       const eyePlaying = eyeAt >= 0 && !eyeDone
-      // ---- the sky's progress
-      const run = clamp01(sP / 0.72)
-      const ride = clamp01((sP - 0.72) / 0.16)
-      const fall = clamp01((sP - 0.88) / 0.12)
-      // The song: fetched once you are in the sky, so it is there for the drop.
-      if (!audio && top >= skyTop - vh) {
+      // The song: fetched once the tree begins, so it is there for the fall.
+      if (!audio && dP >= SPIRAL_END) {
         audio = new Audio(song.src)
         audio.preload = 'auto'
         audio.loop = true
-      }
-      // ---- the breaking point, after the leap
-      if (!riftDone && riftAt < 0 && fall >= 0.999 && cutAt >= 0) {
-        riftAt = time
-        hold(true)
-        score.cue('rift-open')
-        // The song begins its run-up now, so its first drop lands as you cross.
-        if (audio) analyser = score.playSong(audio, Math.max(song.from - DROP, 0))
         if (import.meta.env.DEV) (window as unknown as { forgeSong: HTMLAudioElement | null }).forgeSong = audio
       }
-      const riftT = riftAt < 0 ? -1 : time - riftAt
-      const riftOn = riftAt >= 0 && !riftDone
-      if (riftOn && riftT >= DROP && landedAt < 0) {
-        // The beat drops: you are in the forge.
-        score.cue('rift-cross')
+      // ---- the sky's cutscene, straight on from the eye's
+      const G = song.from
+      if (eyeDone && skyAt < 0 && landedAt < 0 && cutAt >= 0) {
+        skyAt = time
+        hold(true)
+      }
+      if (skipTo >= 0 && skyAt >= 0) {
+        skyAt = time - skipTo
+        if (audio && songAt < 0) {
+          analyser = score.playSong(audio, Math.max(G - 0.6, 0))
+          songAt = time
+        } else if (audio) audio.currentTime = Math.max(G - 0.6, 0)
+        skipTo = -1
+      }
+      const skyT = skyAt < 0 ? -1 : time - skyAt
+      const skyOn = skyAt >= 0 && landedAt < 0
+      const run = clamp01(skyT / RUN)
+      const ride = clamp01((skyT - RUN) / RIDE)
+      const fallT = skyT - RUN - RIDE
+      const leap = clamp01(fallT / LEAP)
+      const descend = clamp01(fallT / G)
+      // The song, from its first second, as you leave Matsya's back.
+      if (skyOn && fallT >= 0 && songAt < 0) {
+        songAt = time
+        if (audio) analyser = score.playSong(audio, 0)
+      }
+      // The drop: you are in the forge.
+      if (skyOn && fallT >= G) {
         landedAt = time
         el.scrollTop = titleTop
-      }
-      if (riftOn && riftT >= BREAK_LENGTH) {
-        riftDone = true
-        hold(false)
+        window.setTimeout(() => hold(false), 300)
       }
       // Past it all some other way (a jump to the end): the forge is simply there.
       if (landedAt < 0 && top >= titleTop - vh * 0.5) {
         landedAt = time
-        riftDone = true
         eyeDone = true
         hold(false)
-        if (audio) analyser = score.playSong(audio, song.from)
+        if (audio && songAt < 0) analyser = score.playSong(audio, song.from)
       }
+      const since = landedAt < 0 ? -1 : time - landedAt
 
       // ---- which world, and draw it
       let worldOn = true
-      let lines = 0
-      if (riftOn && riftT < DROP) {
-        // On through the open sky, faster than the world allows: the air wraps
-        // round you, the colour drains, reality gives in flickers — then, at
-        // the breaking point, everything holds, colourless and still.
-        const still = smooth(3.45, 3.6, riftT)
-        const glide = Math.min(riftT, 3.45) / 3.45
-        sky.update(Math.max(time - cutAt, 0), 1, 1, 1, time, glide * 2.2)
+      if (worldCv.current && !(skyOn && fallT > 0)) worldCv.current.style.opacity = '1'
+      if (skyOn && !eyePlaying) {
+        const still = smooth(G - STILL - 0.1, G - STILL, fallT)
+        // Hold still at the breaking point (the camera freezes where it is).
+        const d = fallT >= 0 ? Math.min(descend, (G - STILL) / G) : 0
+        sky.update(Math.max(time - cutAt, 0), run, ride, leap, time, d)
         const sk = sky.sketch
-        sk.colour = 1
-        sk.mono = 0.85 * smooth(0.4, 3.2, riftT) + 0.15 * still
-        sk.glitch = (0.05 + 0.2 * smooth(0.8, 3.2, riftT)) * (1 - still)
-        sk.dark = 0
-        if (!reduceMotion()) {
-          for (const [at, len, negative] of FLICKERS) {
-            if (riftT >= at && riftT < at + len) {
+        if (fallT >= 0) {
+          // The glitching builds with the song's run-up.
+          const f = descend
+          sk.mono = 0.9 * smooth(0.04, 0.85, f) + 0.1 * still
+          sk.glitch = (0.03 + 0.25 * smooth(0.25, 0.92, f)) * (1 - still)
+          // Reality gives, in its second half: a monochrome frame, or its
+          // negative, at most about twice a second.
+          if (!reduceMotion() && f > 0.45 && still < 0.5) {
+            const beat = Math.floor(fallT / 0.55)
+            if (fallT % 0.55 < 0.09 && hash01(beat) > 0.25) {
               sk.mono = 1
-              sk.dark = negative ? 1 : 0
+              sk.dark = beat % 2 ? 1 : 0
             }
           }
         }
-        const rush = smooth(0.4, 2.8, riftT) * (1 - still)
-        world.render(sky.scene, sky.camera, sk, time, { zoom: 0.6 * rush, shake: 0.006 * rush })
+        const rush = fallT >= 0 ? smooth(0.06, 0.8, descend) * (1 - still) : 0
+        world.render(sky.scene, sky.camera, sk, time, { zoom: 0.25 * sky.state.leap + 0.45 * rush, shake: 0.004 * sky.state.shake + 0.005 * rush })
+        if (fallT < 0) overlay.speed(Math.max(sky.state.speed - 9, 0) / 12, time)
         overlay.air(rush, time, false)
-      } else if (riftOn) {
-        worldOn = false
-      } else if (top >= skyTop - vh * 0.02 || (eyeDone && dP >= 0.999 && cutAt >= 0)) {
-        if (top < titleTop - vh * 0.5 && cutAt >= 0) {
-          sky.update(Math.max(time - cutAt, 0), run, ride, fall, time)
-          world.render(sky.scene, sky.camera, sky.sketch, time, { zoom: 0.25 * sky.state.leap, shake: 0.004 * sky.state.shake })
-          // As many speed lines as the speed calls for, and no more.
-          lines = Math.max(sky.state.speed - 9, 0) / 12
-          overlay.speed(lines, time)
-        } else worldOn = false
+        // The new world comes in under the frozen one: the drawing fades as
+        // the pattern waves spiral in.
+        if (worldCv.current) worldCv.current.style.opacity = String(1 - smooth(G - STILL, G - 0.1, fallT))
       } else if (eyePlaying || (inDescent && dP >= SPIRAL_END)) {
         // ---- the tree (and, at its end, the eye)
         const k = clamp01((dP - SPIRAL_END) / (1 - SPIRAL_END))
@@ -375,34 +386,74 @@ export function Forge({ onBack, landing, score }: Props) {
         } else {
           eyePlane.visible = false
           world.render(tree.scene, tree.camera, tree.sketch, time, { flash: 1 - smooth(SPIRAL_END, SPIRAL_END + 0.03, dP) })
-          overlay.tags(tree.tags, tree.camera)
+          // Each branch, as it grows, on its own card: the domain and its tools.
+          const n = tree.tags.length
+          const f = clamp01((k - 0.08) / 0.84) * n
+          const i = Math.min(Math.floor(f), n - 1)
+          const local = f - i
+          const tag = tree.tags[i]
+          onScreen(tag.slip.getWorldPosition(probeV), tree.camera, innerWidth, innerHeight, probe)
+          overlay.card(
+            smooth(0, 0.12, local) * (1 - smooth(0.88, 1, local)) * (k > 0.08 && k < 0.96 ? 1 : 0),
+            i % 2 ? 'right' : 'left',
+            `BRANCH ${String(i + 1).padStart(2, '0')} / ${String(n).padStart(2, '0')} — THE TREE OF WISDOM`,
+            tag.domain.name,
+            tag.domain.hi,
+            tag.domain.leaves,
+            tag.group.scale.x > 0.2 ? probe : null,
+            i + 1,
+          )
         }
       } else if (inDescent) {
         // ---- the spiral
         const u = clamp01(dP / SPIRAL_END)
         spiral.update(u, time)
         world.render(spiral.scene, spiral.camera, spiral.sketch, time, { flash: smooth(SPIRAL_END - 0.03, SPIRAL_END, dP) })
-        overlay.milestones(spiral.plaques, spiral.camera, spiral.sketch.dark)
+        // Each milestone, as you come down past it, on its own card.
+        {
+          const n = spiral.plaques.length
+          const f = clamp01((u - 0.1) / 0.78) * n
+          const i = Math.min(Math.floor(f), n - 1)
+          const local = f - i
+          const pl = spiral.plaques[i]
+          onScreen(pl.centre, spiral.camera, innerWidth, innerHeight, probe)
+          overlay.card(
+            smooth(0, 0.14, local) * (1 - smooth(0.86, 1, local)) * (u > 0.1 && u < 0.9 ? 1 : 0),
+            i % 2 ? 'right' : 'left',
+            `MILESTONE ${String(i + 1).padStart(2, '0')} / ${String(n).padStart(2, '0')} · ${pl.m.year.toUpperCase()}`,
+            pl.m.title,
+            '',
+            [pl.m.note],
+            probe,
+            i + 1,
+            spiral.sketch.dark > 0.5,
+          )
+        }
       } else worldOn = false
       show(worldCv.current, worldOn)
       show(overlayCv.current, worldOn)
-      void lines
 
-      const wavesOn = landedAt >= 0 && top > titleTop - vh
+      // The new world: the pattern waves spiral in under the frozen sky
+      // just before the drop, and the song's gradient comes up on it.
+      const spiralIn = skyOn && fallT >= G - STILL
+      const wavesOn = spiralIn || (landedAt >= 0 && top > titleTop - vh)
       show(wavesCv.current, wavesOn)
-      if (wavesOn && waves) waves.render(time, clamp01((time - landedAt) / 2.5), levels.read(analyser, time), clamp01((time - landedAt) / 1.5))
-      // The drop: one beat of the song's colour over the forge as it comes in.
-      if (riftOn && riftT >= DROP) {
+      if (wavesOn && waves) waves.render(time, spiralIn ? smooth(G - STILL, G, fallT) : 1, levels.read(analyser, time), landedAt < 0 ? 0 : clamp01(since / 1.2))
+      // On the drop: a burst of cells living and dying in the song's colours
+      // (Game of Life), and out of it your face and the title come together
+      // from particles drawn in from either side.
+      const arriving = since >= 0 && since < 3.2 && top < titleTop + vh * 0.5
+      if (arriving) {
         show(overlayCv.current, true)
-        overlay.drop((riftT - DROP) / 0.6, song.accent)
+        overlay.drop(since / 0.5, song.accent)
+        overlay.life(since, song.palette, song.accent)
+        if (!assembling) assembling = overlay.prepareAssembly(titleCardRef.current)
+        overlay.assemble(assembling, clamp01((since - 0.6) / 2.2))
       }
-      // The title card alone on the fluid first; then the dots gather, close
-      // on the eyes, and the camera pulls back to the whole face.
-      // Through, straight into your face: the dots gather as the
-      // colours settle, close on the eyes; scrolling pulls the camera back.
+      titleCardRef.current?.classList.toggle('is-waiting', landedAt >= 0 ? since < 2.8 : true)
       const portraitOn = landedAt >= 0 && top > titleTop - vh * 0.5 && tP < 1
       show(portraitCv.current, portraitOn)
-      if (portraitOn && portrait) portrait.render(time, pointer, Math.max(clamp01((time - landedAt - 0.3) / 1.6), clamp01(tP / 0.15)), 2.2 - 1.2 * ease((tP - 0.05) / 0.6))
+      if (portraitOn && portrait) portrait.render(time, pointer, Math.max(clamp01((since - 0.5) / 2.4), clamp01(tP / 0.15)), 2.2 - 1.2 * ease((tP - 0.05) / 0.6))
       const orbitOn = top > orbitEl.offsetTop - vh && top < orbitEl.offsetTop + orbitEl.offsetHeight
       show(orbitCv.current, orbitOn)
       if (orbitOn) orbit.render(oP, time)
@@ -410,9 +461,8 @@ export function Forge({ onBack, landing, score }: Props) {
       // ---- where we are
       let next: Stage
       if (eyePlaying) next = 'eye'
-      else if (inDescent && !(eyeDone && dP >= 0.999)) next = dP < SPIRAL_END ? 'spiral' : 'tree'
-      else if (riftOn) next = 'rift'
-      else if (top < titleTop - vh * 0.5 || inDescent) next = ride > 0 || fall > 0 ? 'ride' : 'sky'
+      else if (skyOn) next = fallT >= 0 ? 'rift' : ride > 0 ? 'ride' : 'sky'
+      else if (inDescent) next = dP < SPIRAL_END ? 'spiral' : 'tree'
       else if (top < orbitEl.offsetTop - vh * 0.3) next = 'forge'
       else if (top < orbitEl.offsetTop + orbitEl.offsetHeight - vh) next = 'orbit'
       else next = 'list'
@@ -495,10 +545,9 @@ export function Forge({ onBack, landing, score }: Props) {
           </ul>
         </div>
       </section>
-      <section className="sec sec--sky" ref={skySec} aria-label="The fall" />
 
       <section className="sec sec--title" ref={titleSec} aria-labelledby="forge-title">
-        <div className="title-card">
+        <div className="title-card" ref={titleCardRef}>
           <Decode className="title-card__chapter" text="第二章 · CHAPTER II" />
           <h2 id="forge-title" className="title-card__kanji" lang="ja">
             <Brush text="鍛冶場" />
@@ -575,6 +624,11 @@ export function Forge({ onBack, landing, score }: Props) {
         Say hello
       </a>
       <div className="peek" ref={peekRef} aria-hidden="true" />
+      {(stage === 'sky' || stage === 'ride' || stage === 'rift') && (
+        <button className="skip" onClick={() => (skipRef.current = 1)} data-cursor="open" data-cursor-label="skip">
+          Skip to the forge <span aria-hidden="true">→</span>
+        </button>
+      )}
       <Matsya line={LINES[stage]} hidden={stage === 'ride' || stage === 'rift' || open !== null} />
       {open !== null && all[open] && <Project repos={all} index={open} onGo={setOpen} onClose={() => setOpen(null)} song={song} />}
       <Cursor />

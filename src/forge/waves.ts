@@ -98,7 +98,10 @@ void main() {
   tone = tone * tone;
   // The dots come up from the middle outward as the fluid settles.
   vec2 c = css / (uRes / uDpr) - 0.5;
-  float appear = smoothstep(length(c) * 1.4 - 0.1, length(c) * 1.4 + 0.25, uAppear * 1.6);
+  // The new world arrives as a spiral, winding out from the middle.
+  float turn = atan(c.y, c.x) / 6.2832 + 0.5;
+  float spiral = length(c) * 1.25 + fract(turn + length(c) * 1.5) * 0.45;
+  float appear = smoothstep(spiral - 0.08, spiral + 0.12, uAppear * 1.8);
   float r = (0.06 + 0.36 * tone) * pitch * appear;
   float d = length(gl_FragCoord.xy - center);
   float dot_ = 1.0 - smoothstep(r - 0.8, r + 0.8, d);

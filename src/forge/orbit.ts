@@ -4,12 +4,15 @@ import { hash, smooth, easeInOut, clamp01 } from './ink'
 import { P } from './palette'
 import { prettyName } from './names'
 import { projectArt } from './art'
+import { createHero } from './hero'
 
-// The sword saint. A lone figure in a long black coat stands in a pool of
-// red light on the black fluid; the projects hang round him like blades
-// held in the air — curved, tilted, each at its own height — and turn about
-// him as you scroll. The camera drops in from straight above, circles, and
-// pulls away. Hover lifts a blade; click draws it (opens the project).
+// The library well. A round reading room sunk deep, its shelves climbing in
+// tiers into the dark, lamps on the posts, books loose and flapping up the
+// shaft. At the bottom, in a pool of red light, Ashwin stands in his long
+// coat; the projects hang round him like blades held in the air — curved,
+// tilted, each at its own height — and turn about him as you scroll. He
+// looks at the one you point at. The camera drops in from high in the well,
+// circles, and rises back up it. Hover lifts a blade; click opens it.
 
 const KANJI = ['一', '二', '三', '四', '五', '六', '七', '八', '九', '十', '十一', '十二', '十三', '十四', '十五', '十六']
 const SANS = "'Inter Tight Variable', sans-serif"
@@ -152,161 +155,6 @@ function cardBack() {
   return t
 }
 
-// The figure, from behind and above: hair, a long coat with its centre slit,
-// arms hanging, the red of the floor catching every lower edge. Redrawn on
-// twos so the coat's hem stirs.
-function drawFigure(g: CanvasRenderingContext2D, time: number) {
-  const W = 512
-  const H = 1024
-  g.clearRect(0, 0, W, H)
-  const sway = Math.sin(Math.floor(time * 8) / 8 * 1.6) * 6
-  const cx = W / 2
-  g.lineJoin = 'round'
-  g.lineCap = 'round'
-  // Legs, under the coat.
-  g.fillStyle = '#0B0A0D'
-  for (const s of [-1, 1]) {
-    g.beginPath()
-    g.moveTo(cx + s * 22, 700)
-    g.lineTo(cx + s * 52, 700)
-    g.lineTo(cx + s * 58, 960)
-    g.lineTo(cx + s * 24, 960)
-    g.closePath()
-    g.fill()
-    // Shoes.
-    g.beginPath()
-    g.ellipse(cx + s * 42, 968, 30, 14, 0, 0, Math.PI * 2)
-    g.fill()
-    g.strokeStyle = P.ember
-    g.lineWidth = 3
-    g.beginPath()
-    g.ellipse(cx + s * 42, 968, 30, 14, 0, 0.1, Math.PI - 0.1)
-    g.stroke()
-  }
-  // The coat: shoulders, a long body flaring to the hem, the slit up the back.
-  const coat = () => {
-    g.beginPath()
-    g.moveTo(cx - 92, 250)
-    g.quadraticCurveTo(cx, 220, cx + 92, 250)
-    g.lineTo(cx + 104, 420)
-    g.quadraticCurveTo(cx + 120 + sway, 640, cx + 136 + sway * 1.6, 800)
-    g.lineTo(cx + 8 + sway, 790)
-    g.lineTo(cx, 610)
-    g.lineTo(cx - 8 + sway, 790)
-    g.lineTo(cx - 136 + sway * 1.6, 800)
-    g.quadraticCurveTo(cx - 120 + sway, 640, cx - 104, 420)
-    g.closePath()
-  }
-  coat()
-  const cg = g.createLinearGradient(0, 230, 0, 800)
-  cg.addColorStop(0, '#1C1A20')
-  cg.addColorStop(0.5, '#0E0D11')
-  cg.addColorStop(1, '#2A0E0C')
-  g.fillStyle = cg
-  g.fill()
-  g.strokeStyle = '#000'
-  g.lineWidth = 3
-  g.stroke()
-  // Folds in the coat.
-  g.strokeStyle = 'rgba(241, 235, 223, 0.12)'
-  g.lineWidth = 2
-  for (const [x0, x1] of [
-    [-60, -90],
-    [-25, -40],
-    [30, 46],
-    [62, 96],
-  ]) {
-    g.beginPath()
-    g.moveTo(cx + x0, 300)
-    g.quadraticCurveTo(cx + x0 * 1.1, 560, cx + x1 + sway, 780)
-    g.stroke()
-  }
-  // Red light from the floor along the hem and the flanks.
-  g.strokeStyle = P.vermilion
-  g.lineWidth = 5
-  g.beginPath()
-  g.moveTo(cx - 136 + sway * 1.6, 800)
-  g.lineTo(cx - 8 + sway, 790)
-  g.moveTo(cx + 8 + sway, 790)
-  g.lineTo(cx + 136 + sway * 1.6, 800)
-  g.stroke()
-  g.lineWidth = 3
-  g.strokeStyle = 'rgba(255, 106, 43, 0.7)'
-  g.beginPath()
-  g.moveTo(cx + 104, 420)
-  g.quadraticCurveTo(cx + 120 + sway, 640, cx + 136 + sway * 1.6, 800)
-  g.stroke()
-  // Arms hanging, sleeves, hands.
-  for (const s of [-1, 1]) {
-    g.fillStyle = '#121116'
-    g.beginPath()
-    g.moveTo(cx + s * 86, 258)
-    g.quadraticCurveTo(cx + s * 128, 400, cx + s * 130, 540)
-    g.lineTo(cx + s * 100, 545)
-    g.quadraticCurveTo(cx + s * 98, 400, cx + s * 70, 300)
-    g.closePath()
-    g.fill()
-    g.strokeStyle = '#000'
-    g.lineWidth = 2.5
-    g.stroke()
-    g.fillStyle = '#B9846A'
-    g.beginPath()
-    g.ellipse(cx + s * 116, 566, 15, 26, s * 0.1, 0, Math.PI * 2)
-    g.fill()
-    g.strokeStyle = '#2A140C'
-    g.lineWidth = 2
-    g.stroke()
-    g.strokeStyle = 'rgba(255, 106, 43, 0.8)'
-    g.lineWidth = 2.5
-    g.beginPath()
-    g.ellipse(cx + s * 116, 566, 15, 26, s * 0.1, 0.2, Math.PI - 0.2)
-    g.stroke()
-  }
-  // Collar and neck.
-  g.fillStyle = '#9E6E56'
-  g.fillRect(cx - 20, 196, 40, 46)
-  g.fillStyle = '#16141A'
-  g.beginPath()
-  g.moveTo(cx - 48, 238)
-  g.lineTo(cx, 214)
-  g.lineTo(cx + 48, 238)
-  g.lineTo(cx + 40, 262)
-  g.lineTo(cx - 40, 262)
-  g.closePath()
-  g.fill()
-  // The head from behind: thick dark hair, swept, strands catching cool light.
-  g.fillStyle = '#0A090C'
-  g.beginPath()
-  g.ellipse(cx, 150, 64, 76, 0, 0, Math.PI * 2)
-  g.fill()
-  for (let k = 0; k < 14; k++) {
-    const a = -Math.PI + (k / 13) * Math.PI
-    const x = cx + Math.cos(a) * 60
-    const y = 150 + Math.sin(a) * 70
-    g.beginPath()
-    g.moveTo(x, y)
-    g.quadraticCurveTo(x + Math.cos(a) * 16 + sway * 0.3, y + 20, x + Math.cos(a) * 8, y + 46 + (k % 3) * 8)
-    g.lineTo(x - Math.cos(a) * 6, y + 10)
-    g.closePath()
-    g.fill()
-  }
-  g.strokeStyle = 'rgba(160, 175, 210, 0.45)'
-  g.lineWidth = 2
-  for (let k = 0; k < 7; k++) {
-    g.beginPath()
-    g.moveTo(cx - 40 + k * 12, 92 + Math.abs(k - 3) * 4)
-    g.quadraticCurveTo(cx - 30 + k * 12, 140, cx - 44 + k * 14, 196)
-    g.stroke()
-  }
-  // Ears, catching the red.
-  for (const s of [-1, 1]) {
-    g.fillStyle = '#A5735A'
-    g.beginPath()
-    g.ellipse(cx + s * 62, 160, 9, 17, 0, 0, Math.PI * 2)
-    g.fill()
-  }
-}
-
 const floorVertex = /* glsl */ `
   varying vec2 vP;
   void main() { vP = position.xy; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }
@@ -339,7 +187,7 @@ export function createOrbit(canvas: HTMLCanvasElement, onOpen: (repo: Repo) => v
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.75))
   renderer.setClearColor(0x000000, 0)
   const scene = new THREE.Scene()
-  const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 200)
+  const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 260)
 
   const floorUniforms = { uTime: { value: 0 }, uAlpha: { value: 1 }, uShadow: { value: new THREE.Vector2(0.6, 2.4) } }
   const floor = new THREE.Mesh(
@@ -349,22 +197,152 @@ export function createOrbit(canvas: HTMLCanvasElement, onOpen: (repo: Repo) => v
   floor.rotation.x = -Math.PI / 2
   scene.add(floor)
 
-  // The figure: a drawing on a card that always faces you.
-  const figCanvas = document.createElement('canvas')
-  figCanvas.width = 512
-  figCanvas.height = 1024
-  const figCtx = figCanvas.getContext('2d')!
-  const figTex = new THREE.CanvasTexture(figCanvas)
-  figTex.colorSpace = THREE.SRGBColorSpace
-  const figure = new THREE.Sprite(new THREE.SpriteMaterial({ map: figTex, transparent: true }))
-  figure.scale.set(1.6, 3.2, 1)
-  figure.center.set(0.5, 0.03)
-  scene.add(figure)
+  // Ashwin, in the round: the same figure who ran the sky, inked.
+  const hero = createHero({ toon: true })
+  hero.group.scale.setScalar(1.55)
+  scene.add(hero.group)
+  const still = new THREE.Vector3()
 
-  // Embers rising off the fluid.
-  const emberCount = 160
+  // Light: the red pool from below, lamp-gold from the shelves, a cold
+  // shaft from far up the well.
+  scene.add(new THREE.HemisphereLight('#3A3550', '#2A0806', 0.7))
+  const pool = new THREE.PointLight('#FF4A2A', 40, 26, 1.6)
+  pool.position.set(0, 0.4, 0)
+  scene.add(pool)
+  const shaft = new THREE.DirectionalLight('#BFD0FF', 0.9)
+  shaft.position.set(2, 30, 3)
+  scene.add(shaft)
+  const warm = new THREE.PointLight('#FFB45A', 30, 40, 1.4)
+  warm.position.set(0, 9, 0)
+  scene.add(warm)
+  scene.fog = new THREE.Fog('#070608', 18, 58)
+
+  // The well: tiers of shelves round a drum, posts between the bays, a
+  // gallery rail at each floor, and the floor itself, dark boards.
+  const R = 16
+  const TIER = 3.1
+  const TIERS = 15
+  const wood = new THREE.MeshStandardMaterial({ color: '#2B1A12', roughness: 0.85 })
+  const well = new THREE.Group()
+  scene.add(well)
+  const ground = new THREE.Mesh(new THREE.CircleGeometry(R + 0.5, 96), new THREE.MeshStandardMaterial({ color: '#120C0A', roughness: 0.95 }))
+  ground.rotation.x = -Math.PI / 2
+  ground.position.y = -0.02
+  well.add(ground)
+  // Brass rings set in the boards, a reading-room medallion round him.
+  for (const [r, w] of [[2.4, 0.03], [2.6, 0.012], [6.2, 0.03], [9.4, 0.05], [9.7, 0.015]]) {
+    const ring = new THREE.Mesh(new THREE.RingGeometry(r - w, r + w, 160, 1), new THREE.MeshStandardMaterial({ color: '#9A7A44', metalness: 0.7, roughness: 0.35 }))
+    ring.rotation.x = -Math.PI / 2
+    ring.position.y = -0.01
+    well.add(ring)
+  }
+  const drum = new THREE.Mesh(new THREE.CylinderGeometry(R + 0.6, R + 0.6, TIER * TIERS + 4, 96, 1, true), new THREE.MeshStandardMaterial({ color: '#0D0907', roughness: 1, side: THREE.BackSide }))
+  drum.position.y = (TIER * TIERS) / 2
+  well.add(drum)
+  const BAYS = 28
+  const posts = new THREE.InstancedMesh(new THREE.BoxGeometry(0.34, TIER * TIERS + 4, 0.5), wood, BAYS)
+  const m4 = new THREE.Matrix4()
+  const q4 = new THREE.Quaternion()
+  const v4 = new THREE.Vector3()
+  const s4 = new THREE.Vector3()
+  const up = new THREE.Vector3(0, 1, 0)
+  for (let b = 0; b < BAYS; b++) {
+    const a = (b / BAYS) * Math.PI * 2
+    q4.setFromAxisAngle(up, a)
+    m4.compose(v4.set(Math.sin(a) * (R - 0.1), (TIER * TIERS) / 2, Math.cos(a) * (R - 0.1)), q4, s4.set(1, 1, 1))
+    posts.setMatrixAt(b, m4)
+  }
+  well.add(posts)
+  for (let t = 0; t <= TIERS; t++) {
+    // The shelf board under each row, and a gallery every third.
+    const board = new THREE.Mesh(new THREE.CylinderGeometry(R - 0.05, R - 0.05, 0.08, 96, 1, true), wood)
+    board.position.y = t * TIER + 0.02
+    well.add(board)
+    const lip = new THREE.Mesh(new THREE.TorusGeometry(R - 0.75, 0.05, 6, 120), wood)
+    lip.rotation.x = Math.PI / 2
+    lip.position.y = t * TIER
+    well.add(lip)
+    if (t % 3 === 0 && t > 0) {
+      const rail = new THREE.Mesh(new THREE.TorusGeometry(R - 1.3, 0.04, 6, 140), new THREE.MeshStandardMaterial({ color: '#8A6A3A', metalness: 0.6, roughness: 0.4 }))
+      rail.rotation.x = Math.PI / 2
+      rail.position.y = t * TIER + 1.05
+      well.add(rail)
+      const deck = new THREE.Mesh(new THREE.RingGeometry(R - 1.35, R, 120, 1), wood)
+      deck.rotation.x = -Math.PI / 2
+      deck.position.y = t * TIER + 0.01
+      well.add(deck)
+    }
+  }
+  // The books: spines inward, each its own height, width and lean; leather
+  // in browns, oxbloods and inks, with now and then a vermilion or gilt spine.
+  const leathers = ['#3B2016', '#4A2A1A', '#2A1B14', '#5A1E16', '#1E2430', '#2D2A22', '#5B3A1E', '#3A1414', '#22301F', '#6B4A2A']
+  const books: { a: number; y: number; w: number; h: number; d: number; lean: number; c: string }[] = []
+  for (let t = 0; t < TIERS; t++) {
+    let a = 0
+    let k = t * 1000
+    while (a < Math.PI * 2 - 0.012) {
+      k++
+      const w = (0.09 + hash(k) * 0.14) / R
+      // Gaps between the bays, and a gap now and then where a book was taken.
+      const bay = (a / (Math.PI * 2)) * BAYS
+      if (bay - Math.floor(bay) < 0.04 || hash(k * 1.7) < 0.03) {
+        a += w * 1.8
+        continue
+      }
+      const h = 1.6 + hash(k * 2.3) * 1.0
+      const r = hash(k * 3.1)
+      books.push({ a: a + w / 2, y: t * TIER + 0.06, w: w * R * 0.94, h, d: 0.7 + hash(k * 4.7) * 0.25, lean: hash(k * 5.9) < 0.05 ? 0.25 : 0, c: r > 0.97 ? P.vermilion : r > 0.94 ? '#B08A3E' : leathers[Math.floor(hash(k * 6.1) * leathers.length)] })
+      a += w
+    }
+  }
+  const bookMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0), new THREE.MeshStandardMaterial({ roughness: 0.7 }), books.length)
+  const col = new THREE.Color()
+  books.forEach((bk, i) => {
+    q4.setFromAxisAngle(up, bk.a).multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), bk.lean))
+    m4.compose(v4.set(Math.sin(bk.a) * (R - 0.45), bk.y, Math.cos(bk.a) * (R - 0.45)), q4, s4.set(bk.w, bk.h, bk.d))
+    bookMesh.setMatrixAt(i, m4)
+    bookMesh.setColorAt(i, col.set(bk.c).multiplyScalar(0.8 + hash(i * 9.3) * 0.4))
+  })
+  well.add(bookMesh)
+  // Lamps on the posts, every other tier: a glass globe lit from within.
+  const lampSpots: THREE.Vector3[] = []
+  for (let b = 0; b < BAYS; b += 2) for (let t = 1; t < TIERS; t += 2) {
+    const a = ((b + (t % 4 === 1 ? 0 : 1)) / BAYS) * Math.PI * 2
+    lampSpots.push(new THREE.Vector3(Math.sin(a) * (R - 0.9), t * TIER + 2.2, Math.cos(a) * (R - 0.9)))
+  }
+  const lamps = new THREE.InstancedMesh(new THREE.SphereGeometry(0.16, 16, 12), new THREE.MeshBasicMaterial({ color: '#FFD08A' }), lampSpots.length)
+  const halo = new THREE.InstancedMesh(new THREE.SphereGeometry(0.34, 16, 12), new THREE.MeshBasicMaterial({ color: '#FF9A3A', transparent: true, opacity: 0.16, depthWrite: false, blending: THREE.AdditiveBlending }), lampSpots.length)
+  lampSpots.forEach((p, i) => {
+    m4.compose(p, q4.identity(), s4.set(1, 1, 1))
+    lamps.setMatrixAt(i, m4)
+    halo.setMatrixAt(i, m4)
+  })
+  well.add(lamps, halo)
+
+  // Loose books, flapping up the well like birds, each on its own spiral.
+  const flock = Array.from({ length: 22 }, (_, i) => {
+    const g = new THREE.Group()
+    const cover = new THREE.MeshStandardMaterial({ color: i % 5 === 0 ? P.vermilion : leathers[i % leathers.length], roughness: 0.6, side: THREE.DoubleSide })
+    const paper = new THREE.MeshStandardMaterial({ color: '#E9DFC8', roughness: 0.9, side: THREE.DoubleSide })
+    const wing = (s: number) => {
+      const hinge = new THREE.Group()
+      const c = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.02, 0.7).translate(0.25, 0, 0), cover)
+      const p = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.05, 0.64).translate(0.24, 0.035, 0), paper)
+      hinge.add(c, p)
+      hinge.scale.x = s
+      g.add(hinge)
+      return hinge
+    }
+    const L = wing(-1)
+    const Rw = wing(1)
+    well.add(g)
+    return { g, L, R: Rw, r: 5 + hash(i * 1.3) * 7, a: hash(i * 2.1) * Math.PI * 2, y: hash(i * 3.7) * 40 + 6, sp: 0.1 + hash(i * 4.4) * 0.12, flap: 5 + hash(i * 5.5) * 4 }
+  })
+
+  // Dust in the lamp light, rising slow.
+  const emberCount = 320
   const emberPos = new Float32Array(emberCount * 3)
-  for (let i = 0; i < emberCount; i++) emberPos.set([(hash(i) - 0.5) * 16, hash(i * 3) * 8, (hash(i * 7) - 0.5) * 16], i * 3)
+  for (let i = 0; i < emberCount; i++) emberPos.set([(hash(i) - 0.5) * 22, hash(i * 3) * 30, (hash(i * 7) - 0.5) * 22], i * 3)
   const emberGeo = new THREE.BufferGeometry()
   emberGeo.setAttribute('position', new THREE.BufferAttribute(emberPos, 3))
   const embers = new THREE.Points(emberGeo, new THREE.PointsMaterial({ color: P.gold, size: 0.05, transparent: true, opacity: 0.8, depthWrite: false }))
@@ -426,7 +404,6 @@ export function createOrbit(canvas: HTMLCanvasElement, onOpen: (repo: Repo) => v
     camera.updateProjectionMatrix()
   }
 
-  let lastFig = -1
   // q: 0 … 1 through the orbit section.
   function render(q: number, time: number) {
     active = q > 0.08 && q < 0.9
@@ -435,10 +412,10 @@ export function createOrbit(canvas: HTMLCanvasElement, onOpen: (repo: Repo) => v
     const drop = easeInOut(clamp01(q / 0.22))
     const away = easeInOut(clamp01((q - 0.82) / 0.18))
     const around = -0.6 + q * Math.PI * 0.9
-    const dist = 14 - 4 * drop + 10 * away
-    const height = 26 - 15 * drop + 18 * away
+    const dist = 12 - 3 * drop - 4 * away
+    const height = 30 - 22 * drop + 29 * away
     camera.position.set(Math.sin(around) * dist * (0.05 + 0.95 * drop), height, Math.cos(around) * dist * (0.05 + 0.95 * drop) + 0.01)
-    camera.lookAt(0, 1.4 * drop, 0)
+    camera.lookAt(0, 2.2 * drop + 8 * away, 0)
     floorUniforms.uShadow.value.set(-Math.sin(around) * 2.4, -Math.cos(around) * 2.4)
     // The blades turn about him, each at its own height and tilt, always
     // turned to face you, bobbing and swaying on its own.
@@ -468,15 +445,30 @@ export function createOrbit(canvas: HTMLCanvasElement, onOpen: (repo: Repo) => v
       hovered = null
       onHover(false)
     }
-    // The figure, redrawn on twos.
-    const frame = Math.floor(time * 8)
-    if (frame !== lastFig) {
-      lastFig = frame
-      drawFigure(figCtx, time)
-      figTex.needsUpdate = true
-    }
+    // Ashwin: idle, his head turned to the blade you point at.
+    hero.update(1 / 60, 'idle', 0, still, time, 6)
+    let turn = 0
+    if (hovered) {
+      const p = hovered.group.position
+      turn = Math.atan2(p.x, p.z)
+    } else turn = Math.atan2(camera.position.x, camera.position.z) * 0.5
+    const body = hero.group.rotation.y
+    let dh = turn - body
+    dh = Math.atan2(Math.sin(dh), Math.cos(dh))
+    hero.group.rotation.y += Math.max(-0.02, Math.min(0.02, dh * 0.02))
+    const want = Math.max(-1, Math.min(1, dh))
+    hero.head.rotation.y += (want - hero.head.rotation.y) * 0.08
+    flock.forEach((b, i) => {
+      const a = b.a + time * b.sp
+      const y = (b.y + time * 0.6 * b.sp * 6) % 46 + 4
+      b.g.position.set(Math.sin(a) * b.r, y, Math.cos(a) * b.r)
+      b.g.rotation.set(0.25, a + Math.PI / 2, Math.sin(time + i) * 0.2)
+      const f = Math.sin(time * b.flap + i) * 0.7 + 0.5
+      b.L.rotation.z = f
+      b.R.rotation.z = -f
+    })
     const ep = emberGeo.attributes.position as THREE.BufferAttribute
-    for (let i = 0; i < emberCount; i++) ep.setY(i, (hash(i * 3) * 8 + time * (0.2 + hash(i) * 0.4)) % 8)
+    for (let i = 0; i < emberCount; i++) ep.setY(i, (hash(i * 3) * 30 + time * (0.2 + hash(i) * 0.4)) % 30)
     ep.needsUpdate = true
     floorUniforms.uAlpha.value = smooth(0, 0.15, q) * (1 - smooth(0.9, 1, q))
     renderer.render(scene, camera)

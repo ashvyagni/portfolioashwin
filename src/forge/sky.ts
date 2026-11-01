@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import { clamp01, easeInOut, easeOut, mulberry32, smooth } from './ink'
 import { createMatsya } from './matsya'
+import { createHero, type HeroMode } from './hero'
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import { sketchState } from './world'
 import { P } from './palette'
@@ -168,6 +169,8 @@ export function createSky() {
   }
   const cloudMat = new THREE.MeshStandardMaterial({ color: '#FFFFFF', roughness: 1, flatShading: false })
   const clouds: THREE.Mesh[] = []
+  const ray = new THREE.Raycaster()
+  const blockers: THREE.Object3D[] = []
   const glideClouds: THREE.Mesh[] = []
   const routeCentre = new THREE.Vector3()
   const shapes = Array.from({ length: 6 }, (_, i) => cloudGeo(100 + i))
@@ -188,6 +191,13 @@ export function createSky() {
   scene.add(scraps)
   const d = new THREE.Object3D()
 
+  const hero = createHero()
+  hero.group.visible = false
+  scene.add(hero.group)
+  const heroFeet = new THREE.Vector3()
+  const lastFeet = new THREE.Vector3()
+  const heroVel = new THREE.Vector3()
+  let runPhase = 0
   const matsya = createMatsya()
   matsya.group.scale.setScalar(KOI)
   scene.add(matsya.group)
@@ -195,6 +205,7 @@ export function createSky() {
   const pieces: Piece[] = []
   const pageGroup = new THREE.Group()
   scene.add(pageGroup)
+  blockers.push(pageGroup, ...clouds.slice(0, 16))
   let path: Piece[] = []
   let aspect = 16 / 9
   const pageCam = new THREE.Vector3()
@@ -346,6 +357,20 @@ export function createSky() {
     routeCentre.set(0, 0, 0)
     path.forEach((p) => routeCentre.add(p.rest.pos))
     routeCentre.divideScalar(path.length)
+    // No cloud sits on the route: he must be seen running it.
+    const along: THREE.Vector3[] = []
+    path.forEach((p, i) => {
+      along.push(p.rest.pos)
+      if (path[i + 1]) along.push(p.rest.pos.clone().lerp(path[i + 1].rest.pos, 0.5))
+    })
+    clouds.slice(0, 16).forEach((c) => {
+      const clear = c.scale.x * 3 + 5
+      for (const a of along) {
+        const away = c.position.clone().sub(a)
+        const d = away.length()
+        if (d < clear) c.position.copy(a).addScaledVector(away.normalize(), clear)
+      }
+    })
     // A corridor of clouds along the glide after the leap, passing either
     // side of you (never in the way), so the speed has something to show on.
     glideClouds.forEach((c) => scene.remove(c))
@@ -432,7 +457,10 @@ export function createSky() {
     const n = path.length
     const seg = clamp01(run) * (n - 1)
     const i = Math.min(Math.floor(seg), n - 2)
-    const f = seg - i
+    // Time is bent: the sprint across each piece is quick, the leap from it
+    // long — slow motion in the air, as the camera whips round him.
+    const u = seg - i
+    const f = u < 0.3 ? (u / 0.3) * 0.42 : 0.42 + ((u - 0.3) / 0.7) * 0.58
     topOf(path[i], a)
     topOf(path[i + 1], b)
     fwd.subVectors(b, a).setY(0).normalize()
@@ -508,13 +536,97 @@ export function createSky() {
       }
       state.leap = 0.3 * (1 - off)
     }
-    state.speed = lastPos.distanceTo(pos) / Math.max(dt, 1 / 120)
+    // ---- third person: Ashwin where the eye was, and the camera on him
+    const inScene = run > 0 || ride > 0 || fall > 0
+    hero.group.visible = inScene
+    if (inScene) {
+      const facing = look.clone().sub(pos).setY(0)
+      if (facing.lengthSq() < 1e-6) facing.copy(fwd)
+      facing.normalize()
+      const side = new THREE.Vector3(-facing.z, 0, facing.x)
+      let mode: HeroMode = 'run'
+      heroFeet.copy(pos)
+      heroFeet.y -= EYE
+      if (fall > 0 && descend > 0) mode = 'fall'
+      else if (fall > 0) mode = 'jump'
+      else if (ride > 0) {
+        mode = ride < 0.08 ? 'land' : 'ride'
+        heroFeet.y += EYE * 0.1
+      } else if (f >= 0.42) {
+        const k = (f - 0.42) / 0.58
+        mode = k > 0.88 ? 'land' : 'jump'
+      }
+      const step = heroFeet.distanceTo(lastFeet)
+      if (step < 3) runPhase += step * 3.4
+      heroVel.copy(heroFeet).sub(lastFeet).divideScalar(Math.max(dt, 1 / 120))
+      if (heroVel.length() > 60) heroVel.set(0, 0, 0)
+      lastFeet.copy(heroFeet)
+      hero.group.position.copy(heroFeet)
+      hero.group.rotation.order = 'YXZ'
+      hero.group.rotation.set(mode === 'fall' ? 1.1 + Math.sin(time * 0.6) * 0.15 : 0, Math.atan2(facing.x, facing.z), mode === 'fall' ? Math.sin(time * 0.4) * 0.3 : 0)
+      hero.update(dt, mode, runPhase, heroVel, time, mode === 'run' ? 16 : 9)
+
+      // The camera, cutting from shot to shot like an anime sequence.
+      const H = heroFeet.clone().add(new THREE.Vector3(0, 1.0, 0))
+      const cam = new THREE.Vector3()
+      const at = H.clone()
+      let roll = 0
+      if (fall > 0 && descend > 0) {
+        // Falling: round him, close; now and then a cut wide, to see how far.
+        const shot = Math.floor(descend * 7) % 3
+        const ang = time * 0.35
+        if (shot === 0) cam.copy(H).add(new THREE.Vector3(Math.cos(ang) * 5.5, 1.8 + Math.sin(time * 0.3) * 1.2, Math.sin(ang) * 5.5))
+        else if (shot === 1) cam.copy(H).add(new THREE.Vector3(Math.cos(ang) * 3, -9, Math.sin(ang) * 3))
+        else cam.copy(H).add(new THREE.Vector3(Math.cos(ang + 2) * 12, 10, Math.sin(ang + 2) * 12))
+        roll = Math.sin(time * 0.5) * 0.12
+      } else if (fall > 0) {
+        // The leap off Matsya, seen from under him against the sky.
+        cam.copy(H).addScaledVector(facing, -4).add(new THREE.Vector3(0, -2.2, 0)).addScaledVector(side, 1.5)
+      } else if (ride > 0) {
+        // Round them both as Matsya swims.
+        const ang = ride * Math.PI * 1.3 + 0.6
+        cam.copy(H).add(new THREE.Vector3(Math.cos(ang) * 8, 2.5 + Math.sin(ride * Math.PI) * 2, Math.sin(ang) * 8))
+        at.add(new THREE.Vector3(0, -0.6, 0))
+      } else {
+        const shot = i % 5
+        if (shot === 0) cam.copy(H).addScaledVector(facing, -4.6).addScaledVector(side, 1.1).add(new THREE.Vector3(0, 0.9, 0))
+        else if (shot === 1) cam.copy(H).addScaledVector(side, 5.2).addScaledVector(facing, -0.5).add(new THREE.Vector3(0, 0.4, 0))
+        else if (shot === 2) cam.copy(H).addScaledVector(facing, 5.5).addScaledVector(side, 1.4).add(new THREE.Vector3(0, 0.6, 0))
+        else if (shot === 3) cam.copy(H).addScaledVector(facing, -2.2).addScaledVector(side, 1).add(new THREE.Vector3(0, 4, 0))
+        else {
+          cam.copy(H).addScaledVector(side, -4.2).addScaledVector(facing, 1.2).add(new THREE.Vector3(0, -0.8, 0))
+          roll = 0.22
+        }
+        if (shot !== 2) at.addScaledVector(facing, 1.5)
+        // Mid-leap the camera whips round him, pulling in.
+        if (f >= 0.42) {
+          const k = (f - 0.42) / 0.58
+          const whip = Math.sin(k * Math.PI) * 1.4
+          const off = cam.clone().sub(H)
+          off.applyAxisAngle(new THREE.Vector3(0, 1, 0), whip).multiplyScalar(1 - 0.3 * Math.sin(k * Math.PI))
+          cam.copy(H).add(off)
+        }
+      }
+      // Nothing between the lens and him: pull in in front of any slab or cloud.
+      const toCam = cam.clone().sub(H)
+      const reach = toCam.length()
+      ray.set(H, toCam.normalize())
+      ray.far = reach
+      const hit = ray.intersectObjects(blockers, true)[0]
+      if (hit) cam.copy(H).addScaledVector(toCam, Math.max(hit.distance - 0.5, 1.4))
+      pos.copy(cam)
+      look.copy(at)
+      camera.up.set(Math.sin(roll), Math.cos(roll), 0)
+    }
+    // A cut is not speed: only real motion counts.
+    const moved = lastPos.distanceTo(pos)
+    state.speed = moved > 2.5 ? 0 : moved / Math.max(dt, 1 / 120)
     lastPos.copy(pos)
     camera.position.copy(pos)
     if (state.shake > 0) camera.position.y += (Math.random() - 0.5) * 0.14 * state.shake
-    camera.up.set(0, 1, 0)
+    if (!inScene) camera.up.set(0, 1, 0)
     camera.lookAt(look)
-    camera.fov = 50 + 14 * state.leap * (run > 0 || fall > 0 || ride > 0 ? 1 : 0) + 10 * smooth(0.3, 1, fall)
+    camera.fov = 52 + 10 * state.leap * (run > 0 || fall > 0 || ride > 0 ? 1 : 0)
     camera.updateProjectionMatrix()
     skyUniforms.uDark.value = state.dark
     shared.uHazeK.value = 0.006 + 0.02 * state.dark

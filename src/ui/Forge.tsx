@@ -245,11 +245,20 @@ export function Forge({ onBack, landing, score }: Props) {
         skipRef.current = -1
       }
       // Dev only: hold any moment of a scene, e.g. forgeDebug = { fluid: 6 }.
-      const dbg = import.meta.env.DEV ? (window as unknown as { forgeDebug?: { tree?: number; spiral?: number } }).forgeDebug : undefined
+      const dbg = import.meta.env.DEV ? (window as unknown as { forgeDebug?: { tree?: number; spiral?: number; sky?: [number, number, number, number] } }).forgeDebug : undefined
       if (dbg) {
         show(worldCv.current, true)
         show(overlayCv.current, true)
-        if (dbg.tree !== undefined) {
+        if (dbg.sky) {
+          if (cutAt < 0) {
+            const c = document.createElement('canvas')
+            c.width = c.height = 64
+            sky.build(c, landing, { x: 0.5, y: 0.4, w: 0.07 })
+            cutAt = time - 10
+          }
+          sky.update(10, dbg.sky[0], dbg.sky[1], dbg.sky[2], time, dbg.sky[3])
+          world.render(sky.scene, sky.camera, sky.sketch, time)
+        } else if (dbg.tree !== undefined) {
           tree.update(dbg.tree, time)
           world.render(tree.scene, tree.camera, tree.sketch, time)
         } else if (dbg.spiral !== undefined) {

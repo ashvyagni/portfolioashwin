@@ -29,7 +29,8 @@ export function sketchState(): Sketch {
 
 export function createWorld(canvas: HTMLCanvasElement) {
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' })
-  const ratio = Math.min(window.devicePixelRatio, Math.min(innerWidth, innerHeight) < 700 ? 1.5 : 1.75)
+  const maxRatio = Math.min(window.devicePixelRatio, Math.min(innerWidth, innerHeight) < 700 ? 1.5 : 1.75)
+  let ratio = maxRatio
   renderer.setPixelRatio(ratio)
   renderer.setClearColor(0x000000, 1)
   renderer.shadowMap.enabled = true
@@ -41,7 +42,9 @@ export function createWorld(canvas: HTMLCanvasElement) {
   post.setBloom(0.14, 0.95)
   const buffer = new THREE.Vector2()
 
+  let size = { w: 1, h: 1 }
   function resize(w: number, h: number) {
+    size = { w, h }
     renderer.setSize(w, h, false)
     renderer.getDrawingBufferSize(buffer)
     post.setSize(w, h, buffer)
@@ -55,6 +58,33 @@ export function createWorld(canvas: HTMLCanvasElement) {
     const sh = opts.shake ?? 0
     post.uniforms.uShake.value.set((Math.random() - 0.5) * sh, (Math.random() - 0.5) * sh)
     post.render(time)
+    adapt()
+  }
+
+  // Resolution that keeps the frame rate: if frames run long for a while,
+  // draw fewer pixels; when there is room again, draw more. Steps are coarse
+  // and slow, so it never flickers between the two.
+  let last = 0
+  let slow = 0
+  let fast = 0
+  function adapt() {
+    const now = performance.now()
+    const dt = now - last
+    last = now
+    if (dt > 250 || document.hidden) return
+    if (dt > 24) slow += dt
+    else slow = Math.max(0, slow - dt * 0.5)
+    if (dt < 15) fast += dt
+    else fast = 0
+    let next = ratio
+    if (slow > 1200 && ratio > 1) next = Math.max(1, ratio - 0.25)
+    else if (fast > 4000 && ratio < maxRatio) next = Math.min(maxRatio, ratio + 0.25)
+    if (next !== ratio) {
+      ratio = next
+      slow = fast = 0
+      renderer.setPixelRatio(ratio)
+      resize(size.w, size.h)
+    }
   }
 
   // What is on screen this instant, as a picture (call right after render).

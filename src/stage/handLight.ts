@@ -13,10 +13,30 @@ export function bakeLighting(
   surface: Float32Array,
   light: THREE.Vector3,
 ) {
-  const key = (x: number, y: number, z: number) =>
-    (Math.floor(x / VOXEL) * 73856093) ^ (Math.floor(y / VOXEL) * 19349663) ^ (Math.floor(z / VOXEL) * 83492791)
-  const solid = new Set<number>()
-  for (let i = 0; i < surface.length; i += 3) solid.add(key(surface[i], surface[i + 1], surface[i + 2]))
+  // The voxels as a dense grid over the surface's bounds: a lookup is an
+  // array read, not a hash, which is most of what this costs.
+  let x0 = Infinity, y0 = Infinity, z0 = Infinity, x1 = -Infinity, y1 = -Infinity, z1 = -Infinity
+  for (let i = 0; i < surface.length; i += 3) {
+    x0 = Math.min(x0, surface[i]); x1 = Math.max(x1, surface[i])
+    y0 = Math.min(y0, surface[i + 1]); y1 = Math.max(y1, surface[i + 1])
+    z0 = Math.min(z0, surface[i + 2]); z1 = Math.max(z1, surface[i + 2])
+  }
+  const nx = Math.floor((x1 - x0) / VOXEL) + 1
+  const ny = Math.floor((y1 - y0) / VOXEL) + 1
+  const nz = Math.floor((z1 - z0) / VOXEL) + 1
+  const grid = new Uint8Array(nx * ny * nz)
+  for (let i = 0; i < surface.length; i += 3) {
+    grid[Math.floor((surface[i] - x0) / VOXEL) + nx * (Math.floor((surface[i + 1] - y0) / VOXEL) + ny * Math.floor((surface[i + 2] - z0) / VOXEL))] = 1
+  }
+  const solid = {
+    has(x: number, y: number, z: number) {
+      const gx = Math.floor((x - x0) / VOXEL)
+      const gy = Math.floor((y - y0) / VOXEL)
+      const gz = Math.floor((z - z0) / VOXEL)
+      if (gx < 0 || gy < 0 || gz < 0 || gx >= nx || gy >= ny || gz >= nz) return false
+      return grid[gx + nx * (gy + ny * gz)] === 1
+    },
+  }
 
   // A fixed fan of hemisphere directions around +Z, rotated onto each normal.
   const fan: THREE.Vector3[] = []
@@ -48,7 +68,7 @@ export function bakeLighting(
       dir.copy(f).applyQuaternion(align)
       for (let s = 0; s < reach.length; s++) {
         q.copy(p).addScaledVector(n, 0.055).addScaledVector(dir, reach[s])
-        if (solid.has(key(q.x, q.y, q.z))) {
+        if (solid.has(q.x, q.y, q.z)) {
           blocked += 1 - s / reach.length
           break
         }
@@ -65,7 +85,7 @@ export function bakeLighting(
       if (n.dot(dir) > -0.1) {
         for (let d = 0.07; d < 1.4; d += 0.02) {
           q.copy(p).addScaledVector(n, 0.06).addScaledVector(dir, d)
-          if (solid.has(key(q.x, q.y, q.z))) {
+          if (solid.has(q.x, q.y, q.z)) {
             ray = 0.22
             break
           }

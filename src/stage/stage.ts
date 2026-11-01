@@ -65,8 +65,7 @@ export function createStage(canvas: HTMLCanvasElement) {
     window.setTimeout(() => {
       if (inAct || warmed) return
       warmed = true
-      act.warm()
-      renderer.compile(pothi.scene, act.camera)
+      void act.warm(() => inAct).then(() => renderer.compileAsync(pothi.scene, act.camera)).catch(() => {})
     }, 700),
   )
   const gate = createGate({ small })

@@ -1348,19 +1348,29 @@ export function createAct(renderer: THREE.WebGLRenderer, { small }: { small: boo
 
   // Compile every material and draw each phase once, off screen, so nothing
   // stalls the first time it appears (the glass drop above all).
-  function warm() {
+  // One phase a frame, never all at once, so the gate stays smooth; shaders
+  // compile in parallel first where the browser can. Stops if the act begins.
+  async function warm(stop: () => boolean = () => false) {
     const target = new THREE.WebGLRenderTarget(64, 64)
-    const previous = renderer.getRenderTarget()
-    const keep = state.t
-    renderer.setRenderTarget(target)
+    const frame = () => new Promise((r) => requestAnimationFrame(r))
     for (const t of [3, 16, 22, 26, 27.2, 29.5, IMPACT + 0.4, 36, ACT_LENGTH]) {
+      await frame()
+      if (stop()) break
+      const keep = state.t
       state.t = t
       update(t, pointer)
+      await renderer.compileAsync(scene, camera).catch(() => {})
+      if (stop()) {
+        state.t = keep
+        break
+      }
+      const previous = renderer.getRenderTarget()
+      renderer.setRenderTarget(target)
       renderer.render(scene, camera)
+      renderer.setRenderTarget(previous)
+      state.t = keep
     }
-    renderer.setRenderTarget(previous)
     target.dispose()
-    state.t = keep
   }
 
   return { scene, camera, state, update, setSize, speed, sketch, anchor, cursorOn: () => cursor.on, warm }

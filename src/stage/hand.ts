@@ -53,24 +53,33 @@ function surfaceArea(geometry: THREE.BufferGeometry) {
 // point lies within `radius`. Candidates are already in random order.
 function poissonFilter(positions: Float32Array, radius: number) {
   const count = positions.length / 3
-  const grid = new Map<number, number[]>()
+  // A dense grid of cells one radius wide, each a linked list of kept
+  // points (head per cell, next per point): array reads, not hashing.
+  let x0 = Infinity, y0 = Infinity, z0 = Infinity, x1 = -Infinity, y1 = -Infinity, z1 = -Infinity
+  for (let i = 0; i < count; i++) {
+    x0 = Math.min(x0, positions[i * 3]); x1 = Math.max(x1, positions[i * 3])
+    y0 = Math.min(y0, positions[i * 3 + 1]); y1 = Math.max(y1, positions[i * 3 + 1])
+    z0 = Math.min(z0, positions[i * 3 + 2]); z1 = Math.max(z1, positions[i * 3 + 2])
+  }
+  const nx = Math.floor((x1 - x0) / radius) + 1
+  const ny = Math.floor((y1 - y0) / radius) + 1
+  const nz = Math.floor((z1 - z0) / radius) + 1
+  const head = new Int32Array(nx * ny * nz).fill(-1)
+  const next = new Int32Array(count).fill(-1)
   const kept: number[] = []
   const r2 = radius * radius
-  const key = (x: number, y: number, z: number) => (x * 73856093) ^ (y * 19349663) ^ (z * 83492791)
   for (let i = 0; i < count; i++) {
     const x = positions[i * 3]
     const y = positions[i * 3 + 1]
     const z = positions[i * 3 + 2]
-    const gx = Math.floor(x / radius)
-    const gy = Math.floor(y / radius)
-    const gz = Math.floor(z / radius)
+    const gx = Math.floor((x - x0) / radius)
+    const gy = Math.floor((y - y0) / radius)
+    const gz = Math.floor((z - z0) / radius)
     let free = true
-    search: for (let dx = -1; dx <= 1; dx++) {
-      for (let dy = -1; dy <= 1; dy++) {
-        for (let dz = -1; dz <= 1; dz++) {
-          const cell = grid.get(key(gx + dx, gy + dy, gz + dz))
-          if (!cell) continue
-          for (const j of cell) {
+    search: for (let dz = Math.max(gz - 1, 0); dz <= Math.min(gz + 1, nz - 1); dz++) {
+      for (let dy = Math.max(gy - 1, 0); dy <= Math.min(gy + 1, ny - 1); dy++) {
+        for (let dx = Math.max(gx - 1, 0); dx <= Math.min(gx + 1, nx - 1); dx++) {
+          for (let j = head[dx + nx * (dy + ny * dz)]; j >= 0; j = next[j]) {
             const ex = positions[j * 3] - x
             const ey = positions[j * 3 + 1] - y
             const ez = positions[j * 3 + 2] - z
@@ -84,10 +93,9 @@ function poissonFilter(positions: Float32Array, radius: number) {
     }
     if (!free) continue
     kept.push(i)
-    const k = key(gx, gy, gz)
-    const cell = grid.get(k)
-    if (cell) cell.push(i)
-    else grid.set(k, [i])
+    const c = gx + nx * (gy + ny * gz)
+    next[i] = head[c]
+    head[c] = i
   }
   return kept
 }
@@ -631,7 +639,10 @@ export function createHand({ small }: { small: boolean }) {
     return out
   }
 
-  const ready = loadHandRig(HAND_MODEL).then((loaded) => {
+  // The bake is heavy: it gives the page back between its stages, so the
+  // gate never freezes while it runs.
+  const pause = () => new Promise<void>((r) => setTimeout(r, 0))
+  const ready = loadHandRig(HAND_MODEL).then(async (loaded) => {
     rig = loaded
     const rng = mulberry32(11)
     const signSkin = rig.pose(HAND_POSE).skin.map((m) => m.clone())
@@ -657,11 +668,13 @@ export function createHand({ small }: { small: boolean }) {
     viewSurface.setIndex(g.index)
     viewSurface.applyMatrix4(toView)
     const expected = (0.75 * surfaceArea(viewSurface)) / (spacing * spacing)
+    await pause()
     const raw = sampleSurface(g, Math.round(expected * 3.2), rng)
     const detail = addAnatomy(raw.positions, raw.normals, rig.bindJoints)
     const signDots = skinPoints(detail.positions, raw.skinIndex, raw.skinWeight, signSkin, detail.normals)
     const viewPos = new Float32Array(signDots.positions.length)
     for (let i = 0; i < viewPos.length / 3; i++) v.fromArray(signDots.positions, i * 3).applyMatrix4(toView).toArray(viewPos, i * 3)
+    await pause()
     const kept = poissonFilter(viewPos, spacing)
 
     const out = {
@@ -687,6 +700,7 @@ export function createHand({ small }: { small: boolean }) {
       out.det.push(detail.nail[i], detail.knuckle[i], detail.crease[i], 0)
     }
 
+    await pause()
     // The sleeve, its cuff just past the wrist joint, falling away down the forearm.
     const signJoints = rig.pose(HAND_POSE).joints
     const wristM = signJoints.get('wrist')!
@@ -719,6 +733,7 @@ export function createHand({ small }: { small: boolean }) {
       out.det.push(0, 0, 0, 1)
     }
 
+    await pause()
     // Bake light on the sign pose: what each dot sees once the gesture is made.
     const count = out.bind.length / 3
     const view = new Float32Array(out.view)
@@ -732,6 +747,7 @@ export function createHand({ small }: { small: boolean }) {
       light[i * 2 + 1] = shadow[i]
     }
 
+    await pause()
     const starts = new Float32Array(count * 3)
     const rands = new Float32Array(count)
     const heights = new Float32Array(count)
@@ -753,6 +769,7 @@ export function createHand({ small }: { small: boolean }) {
     geometry.setAttribute('aRand', new THREE.BufferAttribute(rands, 1))
     geometry.setAttribute('aHeight', new THREE.BufferAttribute(heights, 1))
 
+    await pause()
     // The continuous surface (occluder and painting): the same anatomy on its
     // vertices, lit on the sign pose too.
     const sPos = new Float32Array(gPos)
@@ -773,6 +790,7 @@ export function createHand({ small }: { small: boolean }) {
       v.fromArray(sSign.positions, i * 3).applyMatrix4(toView).toArray(sView, i * 3)
       n.fromArray(sSign.normals!, i * 3).transformDirection(rot).toArray(sViewNor, i * 3)
     }
+    await pause()
     const sLight = bakeLighting(sView, sViewNor, voxels, KEY_LIGHT)
     const sLit = new Float32Array((sView.length / 3) * 2)
     for (let i = 0; i < sLit.length / 2; i++) {
